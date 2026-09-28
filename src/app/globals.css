@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #070b14;
+  --foreground: #e2e8f0;
 }
 
 @theme inline {
@@ -12,15 +12,46 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background:
+    radial-gradient(1200px 600px at 30% -10%, #10213f 0%, transparent 60%),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ---- Orb: one element, state driven by data-status ---- */
+.orb {
+  --orb-a: #38bdf8;
+  --orb-b: #6366f1;
+  --orb-speed: 6s;
+  cursor: pointer;
+  transition: transform 300ms ease;
+}
+.orb:hover:not(:disabled) { transform: scale(1.03); }
+.orb[data-status="listening"] { --orb-a: #34d399; --orb-b: #0ea5e9; --orb-speed: 2s; }
+.orb[data-status="transcribing"],
+.orb[data-status="thinking"] { --orb-a: #a78bfa; --orb-b: #6366f1; --orb-speed: 1.2s; }
+.orb[data-status="speaking"] { --orb-a: #38bdf8; --orb-b: #f0abfc; --orb-speed: 1.6s; }
+
+.orb-core,
+.orb-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: conic-gradient(from 0deg, var(--orb-a), var(--orb-b), var(--orb-a));
+  animation: orb-spin var(--orb-speed) linear infinite;
+}
+.orb-core { inset: 6%; box-shadow: inset 0 0 40px rgb(0 0 0 / 0.35); }
+.orb-glow { filter: blur(28px); opacity: 0.55; }
+.orb[data-status="idle"] .orb-glow { animation: orb-spin var(--orb-speed) linear infinite, orb-breathe 4s ease-in-out infinite; }
+.orb[data-status="listening"] .orb-glow,
+.orb[data-status="speaking"] .orb-glow { animation: orb-spin var(--orb-speed) linear infinite, orb-pulse 0.9s ease-in-out infinite; }
+
+@keyframes orb-spin { to { transform: rotate(360deg); } }
+@keyframes orb-breathe { 50% { opacity: 0.3; } }
+@keyframes orb-pulse { 50% { opacity: 0.85; scale: 1.08; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-core, .orb-glow { animation: none !important; }
 }

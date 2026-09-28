@@ -43,3 +43,6 @@ next-env.d.ts
 
 # evals
 /evals/results/*.json
+
+# local tooling
+/.claude/launch.json

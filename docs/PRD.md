@@ -96,7 +96,7 @@ Browser (Next.js client)
  ├─ POST /api/stt ───────────────► Groq Whisper (whisper-large-v3-turbo)
  ├─ POST /api/turn (SSE stream) ─► Turn Orchestrator (server)
  │                                   ├─ L1 Input Screen   (Prompt Guard + heuristics)
- │                                   ├─ L2 Topic Policy   (Llama Guard + policy classifier)
+ │                                   ├─ L2 Topic Policy   (gpt-oss-safeguard + our policy)
  │                                   ├─ LLM + tools       (Groq, fallback Gemini)
  │                                   │    ├─ get_weather  → Open-Meteo
  │                                   │    └─ memory.*     → L5 Memory Guard → Supabase
@@ -126,7 +126,7 @@ The client only ever speaks `sentence` events, so audio that hasn't passed L4 ca
 | Framework | Next.js (App Router, TypeScript) | One repo for UI and API; deploys to Vercel free |
 | STT | Groq `whisper-large-v3-turbo` | Fast, accurate, free tier |
 | LLM | Groq (Llama 3.3 70B / gpt-oss), fallback Gemini Flash | Fast tool calling; a second provider for reliability |
-| Safety models | Groq `llama-prompt-guard-2`, `llama-guard-4` | Purpose-built, fast, free |
+| Safety models | Groq `llama-prompt-guard-2-86m`, `gpt-oss-safeguard-20b` | Purpose-built, fast, free; safeguard takes our written policy as input |
 | TTS | `kokoro-js` (in-browser, WebGPU/WASM) | Good quality, free, no quota; runs on the user's device |
 | TTS fallback | Web `speechSynthesis` | Used while Kokoro loads, or if WebGPU is unavailable |
 | VAD | `@ricky0123/vad-web` | Runs in the browser; enables hands-free mode and barge-in |
@@ -153,8 +153,8 @@ Each layer is a pure module under `src/lib/guardrails/`. It has a common interfa
 - **On block:** send a scripted in-character reply. The main LLM is never called.
 
 ### L2 — Topic policy
-- **Llama Guard 4:** covers standard harm categories (its hazard taxonomy).
-- **Policy classifier:** a small, fast LLM with JSON-schema output returns `{category, allowed, confidence}` for our custom prohibited list (medical, legal, financial, politics).
+- **gpt-oss-safeguard-20b:** a policy-following safety model. We pass it *our* written policy (§3) and it returns `{category, allowed, rationale}`. That covers standard harm categories and our custom prohibited list (medical, legal, financial, politics) in one call.
+  > Llama Guard 4 is no longer on Groq's model list (checked 2026-09-28), so the safeguard model replaces it.
 - **Few-shot examples of false positives** ("kill a process", "shoot a photo") to keep over-refusal low.
 - **Self-harm** goes to a supportive response template instead of a refusal.
 - **Latency trick:** run L1 and L2 **in parallel** with the start of the main LLM call. If either blocks, abort the LLM stream. The guards cost almost nothing on benign turns, and nothing reaches TTS until L4 anyway.
@@ -173,7 +173,7 @@ Each layer is a pure module under `src/lib/guardrails/`. It has a common interfa
 
 ### L4 — Output screen (before TTS)
 - The LLM stream is split into sentences on the server.
-- Each sentence goes through Llama Guard (as a response check) plus a quick leak check (does it quote system-prompt text, contain PII patterns, or break character?).
+- Each sentence goes through gpt-oss-safeguard (as a response check) plus a quick leak check (does it quote system-prompt text, contain PII patterns, or break character?).
 - Sentence *n+1* is checked while sentence *n* is being spoken, so the latency cost falls mostly on the first sentence.
 - **On block:** drop the sentence, stop the stream and replace it with a safe closing line.
 
