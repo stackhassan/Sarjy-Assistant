@@ -1,12 +1,12 @@
 /**
- * Pinned model IDs. Free-tier catalogs change often; verified against
- * https://console.groq.com/docs/models on 2026-09-28.
+ * Pinned model IDs. Free-tier catalogs change often, and the docs page can list
+ * models a given key can't use — verified against GET /openai/v1/models on 2026-09-28.
  */
 export const MODELS = {
   /** Main conversational model with tool calling. */
-  chat: "llama-3.3-70b-versatile",
+  chat: "openai/gpt-oss-120b",
   /** Small, fast model for classification (topic policy, memory-write checks). */
-  fast: "llama-3.1-8b-instant",
+  fast: "openai/gpt-oss-20b",
   /** L1: jailbreak / prompt-injection classifier. */
   promptGuard: "meta-llama/llama-prompt-guard-2-86m",
   /** L2/L4: policy-following safety model (takes our written policy as input). */

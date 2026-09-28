@@ -2,7 +2,14 @@ import { env } from "@/lib/env";
 import { MODELS } from "./models";
 import type { ChatDelta, ChatMessage, ToolChoice, ToolSpec } from "./types";
 
-type Provider = { name: "groq" | "gemini"; baseUrl: string; apiKey: string; model: string };
+type Provider = {
+  name: "groq" | "gemini";
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** Provider-specific request fields. */
+  extra?: Record<string, unknown>;
+};
 
 export type StreamChatOptions = {
   messages: ChatMessage[];
@@ -35,7 +42,14 @@ const openUntil = new Map<string, number>();
 function providers(): Provider[] {
   const e = env();
   const list: Provider[] = [
-    { name: "groq", baseUrl: "https://api.groq.com/openai/v1", apiKey: e.GROQ_API_KEY, model: MODELS.chat },
+    {
+      name: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      apiKey: e.GROQ_API_KEY,
+      model: MODELS.chat,
+      // gpt-oss is a reasoning model; low effort keeps time-to-first-token voice-friendly.
+      extra: { reasoning_effort: "low" },
+    },
   ];
   if (e.GEMINI_API_KEY) {
     list.push({
@@ -91,6 +105,7 @@ async function openStream(p: Provider, opts: StreamChatOptions): Promise<Respons
         tool_choice: opts.tools?.length ? (opts.toolChoice ?? "auto") : undefined,
         temperature: opts.temperature ?? 0.4,
         stream: true,
+        ...p.extra,
       }),
       signal,
     });
