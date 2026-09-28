@@ -6,6 +6,8 @@ const optional = <T extends z.ZodType>(s: T) => z.preprocess((v) => (v === "" ? 
 const schema = z.object({
   GROQ_API_KEY: z.string().min(1, "GROQ_API_KEY is required"),
   GEMINI_API_KEY: optional(z.string()),
+  /** Signs screened sentences for /api/tts. Derived from GROQ_API_KEY if unset. */
+  TTS_SIGNING_SECRET: optional(z.string().min(16)),
   NEXT_PUBLIC_SUPABASE_URL: optional(z.string().url()),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: optional(z.string()),
 });

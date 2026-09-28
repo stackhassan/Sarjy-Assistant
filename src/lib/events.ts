@@ -11,9 +11,12 @@ export type TurnEvent =
   | { type: "guard"; layer: GuardLayer; verdict: GuardVerdict; reason: string; ms: number }
   | { type: "tool_call"; id: string; name: string; args: string }
   | { type: "tool_result"; id: string; name: string; ok: boolean; data: unknown; ms: number }
-  /** Only sentences that passed L4 are emitted, so the client can speak them directly. */
-  | { type: "sentence"; idx: number; text: string }
+  /**
+   * Only sentences that passed L4 are emitted. `sig` is required by /api/tts,
+   * so unscreened text can't be voiced even by a modified client.
+   */
+  | { type: "sentence"; idx: number; text: string; sig: string }
   | { type: "done"; turnId: string; provider?: string; timings: Record<string, number> }
-  | { type: "error"; stage: string; message: string; spokenFallback: string };
+  | { type: "error"; stage: string; message: string; spokenFallback: string; sig: string };
 
 export type HistoryMessage = { role: "user" | "assistant"; content: string };

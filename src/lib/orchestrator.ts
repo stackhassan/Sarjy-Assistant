@@ -4,8 +4,10 @@ import type { GuardResult } from "@/lib/guardrails/types";
 import { streamChat } from "@/lib/llm/providers";
 import type { ChatMessage, ToolCall } from "@/lib/llm/types";
 import { systemPrompt } from "@/lib/prompts";
+import { splitLong } from "@/lib/text/batch";
 import { SentenceSplitter } from "@/lib/text/sentences";
 import { runTool, toolSpecs } from "@/lib/tools";
+import { signSentence } from "@/lib/tts/sign";
 
 export type TurnInput = {
   text: string;
@@ -37,6 +39,11 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
   let provider: string | undefined;
   let idx = 0;
 
+  /** Emits approved text as signed, TTS-sized sentence events. */
+  const emitSentence = (text: string) => {
+    for (const piece of splitLong(text)) emit({ type: "sentence", idx: idx++, text: piece, sig: signSentence(piece) });
+  };
+
   const emitGuard = (r: GuardResult) =>
     emit({ type: "guard", layer: r.layer, verdict: r.verdict, reason: r.reason, ms: r.ms });
 
@@ -52,7 +59,7 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
       if (blocked) {
         stopped = true;
         llmAbort.abort();
-        emit({ type: "sentence", idx: idx++, text: blocked.replacement ?? "Let's talk about something else." });
+        emitSentence(blocked.replacement ?? "Let's talk about something else.");
       }
       return blocked;
     });
@@ -68,11 +75,11 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
       if (r.verdict === "block") {
         stopped = true;
         llmAbort.abort();
-        emit({ type: "sentence", idx: idx++, text: r.replacement ?? "Let's leave it there." });
+        emitSentence(r.replacement ?? "Let's leave it there.");
         return;
       }
       mark("firstSentence");
-      emit({ type: "sentence", idx: idx++, text: sentence });
+      emitSentence(sentence);
     });
   };
 
@@ -130,7 +137,13 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
     }
   } catch (err) {
     if (!stopped && !signal.aborted) {
-      emit({ type: "error", stage: "llm", message: (err as Error).message, spokenFallback: FALLBACK_LINE });
+      emit({
+        type: "error",
+        stage: "llm",
+        message: (err as Error).message,
+        spokenFallback: FALLBACK_LINE,
+        sig: signSentence(FALLBACK_LINE),
+      });
     }
   }
 

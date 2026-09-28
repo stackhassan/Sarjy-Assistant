@@ -13,6 +13,11 @@ export const MODELS = {
   safeguard: "openai/gpt-oss-safeguard-20b",
   /** Speech-to-text. */
   stt: "whisper-large-v3-turbo",
+  /** Text-to-speech (requires one-time terms acceptance in the Groq console). */
+  tts: "canopylabs/orpheus-v1-english",
   /** Fallback chat model on Gemini's OpenAI-compatible endpoint. */
   fallbackChat: "gemini-2.5-flash",
 } as const;
+
+/** Orpheus voices: autumn, diana, hannah (female); austin, daniel, troy (male). */
+export const TTS_VOICE = "diana";

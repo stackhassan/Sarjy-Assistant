@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Recorder } from "@/lib/client/recorder";
-import { Speaker } from "@/lib/client/speaker";
+import { Speaker, type VoiceSource } from "@/lib/client/speaker";
+import { TTS_VOICE } from "@/lib/llm/models";
 import { readEvents } from "@/lib/client/sse";
 import type { HistoryMessage, TurnEvent } from "@/lib/events";
 import { Inspector } from "./Inspector";
@@ -23,6 +24,7 @@ export function VoiceAssistant() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [voice, setVoice] = useState<{ source: VoiceSource; reason?: string }>({ source: "orpheus" });
 
   const recorder = useRef<Recorder | null>(null);
   const speaker = useRef<Speaker | null>(null);
@@ -38,6 +40,7 @@ export function VoiceAssistant() {
     speaker.current = new Speaker({
       onStart: () => setStatus("speaking"),
       onIdle: () => setStatus((s) => (s === "speaking" ? "idle" : s)),
+      onVoice: (source, reason) => setVoice({ source, reason }),
     });
     return () => speaker.current?.cancel();
   }, []);
@@ -86,13 +89,13 @@ export function VoiceAssistant() {
                 ? `${t.assistant} ${e.spokenFallback}`.trim()
                 : t.assistant,
         }));
-        if (e.type === "sentence") speaker.current?.enqueue(e.text);
-        if (e.type === "error") speaker.current?.enqueue(e.spokenFallback);
+        if (e.type === "sentence") speaker.current?.enqueue(e);
+        if (e.type === "error") speaker.current?.enqueue({ text: e.spokenFallback, sig: e.sig });
       }
     } catch (err) {
       if (ac.signal.aborted) return;
       setNotice((err as Error).message);
-      speaker.current?.enqueue("Sorry, I couldn't reach my brain just now.");
+      speaker.current?.enqueue({ text: "Sorry, I couldn't reach my brain just now." });
     } finally {
       if (inflight.current === ac) inflight.current = null;
       setStatus((s) => (s === "thinking" && !speaker.current?.speaking ? "idle" : s));
@@ -152,6 +155,9 @@ export function VoiceAssistant() {
         <header className="mb-8 text-center">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-100">Sarjy</h1>
           <p className="text-sm text-slate-400">A voice assistant with guardrails you can watch.</p>
+          <p className="mt-1 text-xs text-slate-500" title={voice.reason}>
+            Voice: {voice.source === "orpheus" ? `Orpheus · ${TTS_VOICE[0].toUpperCase()}${TTS_VOICE.slice(1)}` : `browser fallback${voice.reason ? ` (${voice.reason})` : ""}`}
+          </p>
         </header>
 
         <Orb status={status} onClick={onOrb} disabled={busy} />
