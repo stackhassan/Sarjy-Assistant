@@ -115,7 +115,7 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
         emit({ type: "tool_call", id: call.id, name: call.function.name, args: call.function.arguments });
         const ts = performance.now();
         const result = await runTool(call.function.name, call.function.arguments, signal);
-        mark(`tool:${call.function.name}`);
+        timings[`tool:${call.function.name}`] = Math.round(performance.now() - ts);
         emit({
           type: "tool_result",
           id: call.id,

@@ -3,12 +3,15 @@ import { MODELS } from "./models";
 import type { ChatDelta, ChatMessage, ToolChoice, ToolSpec } from "./types";
 
 type Provider = {
-  name: "groq" | "gemini";
+  /** Shown in the Inspector and used as the circuit-breaker key. */
+  name: string;
   baseUrl: string;
   apiKey: string;
   model: string;
   /** Provider-specific request fields. */
   extra?: Record<string, unknown>;
+  /** Max wait for response headers before failing over. */
+  timeoutMs: number;
 };
 
 export type StreamChatOptions = {
@@ -17,8 +20,6 @@ export type StreamChatOptions = {
   toolChoice?: ToolChoice;
   temperature?: number;
   signal?: AbortSignal;
-  /** Max wait for the provider to start streaming before we fail over. */
-  firstTokenTimeoutMs?: number;
 };
 
 export class ProviderError extends Error {
@@ -36,20 +37,19 @@ export class ProviderError extends Error {
  * State is per server instance, which is fine for serverless — worst case a
  * cold instance retries a provider that is still down once.
  */
-const COOLDOWN_MS = 60_000;
+const COOLDOWN_MS = 30_000;
 const openUntil = new Map<string, number>();
 
 function providers(): Provider[] {
   const e = env();
+  const groq = { baseUrl: "https://api.groq.com/openai/v1", apiKey: e.GROQ_API_KEY };
+  // gpt-oss is a reasoning model; low effort keeps time-to-first-token voice-friendly.
+  const lowReasoning = { reasoning_effort: "low" };
   const list: Provider[] = [
-    {
-      name: "groq",
-      baseUrl: "https://api.groq.com/openai/v1",
-      apiKey: e.GROQ_API_KEY,
-      model: MODELS.chat,
-      // gpt-oss is a reasoning model; low effort keeps time-to-first-token voice-friendly.
-      extra: { reasoning_effort: "low" },
-    },
+    // Header latency for gpt-oss-120b is usually ~1-3 s but spikes past that on busy periods.
+    { name: "groq/gpt-oss-120b", ...groq, model: MODELS.chat, extra: lowReasoning, timeoutMs: 6000 },
+    // Same key, smaller model: survives 120b capacity issues without needing a second provider.
+    { name: "groq/gpt-oss-20b", ...groq, model: MODELS.fast, extra: lowReasoning, timeoutMs: 5000 },
   ];
   if (e.GEMINI_API_KEY) {
     list.push({
@@ -57,6 +57,7 @@ function providers(): Provider[] {
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
       apiKey: e.GEMINI_API_KEY,
       model: MODELS.fallbackChat,
+      timeoutMs: 6000,
     });
   }
   return list;
@@ -91,7 +92,7 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<ChatD
 
 async function openStream(p: Provider, opts: StreamChatOptions): Promise<Response> {
   const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(), opts.firstTokenTimeoutMs ?? 3000);
+  const timer = setTimeout(() => timeout.abort(), p.timeoutMs);
   const signal = opts.signal ? AbortSignal.any([opts.signal, timeout.signal]) : timeout.signal;
 
   try {
