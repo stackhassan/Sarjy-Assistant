@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolSpec } from "@/lib/llm/types";
 import { chaos, sleep } from "@/lib/reliability/context";
+import { hedge } from "@/lib/reliability/hedge";
 import { retry, TransientError } from "@/lib/reliability/retry";
 import { TtlCache } from "@/lib/reliability/ttlCache";
 
@@ -85,11 +86,17 @@ export type WeatherResult = WeatherOk | WeatherError;
 
 // ---------- budgets & caches ----------
 
-const OPEN_METEO_TIMEOUT_MS = 1500;
-const MET_NO_TIMEOUT_MS = 2500;
-const GEOCODE_TIMEOUT_MS = 1500;
+// Measured from a dev machine on 2026-09-29: Open-Meteo geocoding 0.9-2.3 s typical, 11 s
+// worst; forecast 0.85-5.9 s; MET Norway 1.5-2.5 s. So we hedge instead of waiting out timeouts.
+const GEOCODE_TIMEOUT_MS = 3500;
+/** Start a duplicate geocoding request if the first hasn't answered by then. */
+const GEOCODE_HEDGE_MS = 1000;
+const OPEN_METEO_TIMEOUT_MS = 4500;
+/** Start MET Norway in parallel if Open-Meteo hasn't answered by then (or fails sooner). */
+const FORECAST_HEDGE_MS = 1500;
+const MET_NO_TIMEOUT_MS = 4000;
 /** Hard ceiling for the whole tool call, including retries and fallbacks. */
-const TOOL_BUDGET_MS = 4500;
+const TOOL_BUDGET_MS = 7000;
 
 /** Place lookups never change: cache for a day. Also removes ~0.3-1 s from repeat queries. */
 const geocodeCache = new TtlCache<Place[]>(500, 24 * 60 * 60_000);
@@ -128,7 +135,7 @@ export async function getWeather(rawArgs: unknown, signal?: AbortSignal): Promis
 
   let places: Place[];
   try {
-    places = await geocode(location, sig, deadline);
+    places = await geocode(location, sig);
   } catch (err) {
     return unavailable(location, `place lookup failed: ${(err as Error).message}`);
   }
@@ -144,26 +151,25 @@ export async function getWeather(rawArgs: unknown, signal?: AbortSignal): Promis
   const faultInjected = chaos("weather_down") || chaos("weather_slow") || chaos("weather_all_down");
   if (cached && !faultInjected && Date.now() - cached.at < FRESH_MS) return { ...cached.data, alternatives };
 
-  const failures: string[] = [];
-  for (const source of ["open-meteo", "met.no"] as const) {
-    try {
-      const data =
-        source === "open-meteo"
-          ? await fetchOpenMeteo(place, days, imperial, sig, deadline)
-          : await fetchMetNo(place, days, imperial, sig);
-      forecastCache.set(key, { at: Date.now(), data });
-      return { ...data, alternatives };
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      failures.push(`${source}: ${(err as Error).message}`);
-    }
+  let failure: string;
+  try {
+    const { value: data } = await hedge(
+      (s) => fetchOpenMeteo(place, days, imperial, s, deadline),
+      (s) => fetchMetNo(place, days, imperial, s),
+      { delayMs: FORECAST_HEDGE_MS, signal: sig },
+    );
+    forecastCache.set(key, { at: Date.now(), data });
+    return { ...data, alternatives };
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    failure = (err as Error).message;
   }
 
   if (cached) {
     const minutesOld = Math.round((Date.now() - cached.at) / 60_000);
     return { ...cached.data, alternatives, stale: { asOf: new Date(cached.at).toISOString(), minutesOld } };
   }
-  return unavailable(location, failures.join("; "));
+  return unavailable(location, failure);
 }
 
 function unavailable(query: string, detail: string): WeatherError {
@@ -216,25 +222,20 @@ function retryFast<T>(fn: () => Promise<T>, signal: AbortSignal, deadline: numbe
 
 // ---------- geocoding (Open-Meteo) ----------
 
-async function geocode(query: string, signal: AbortSignal, deadline: number): Promise<Place[]> {
+async function geocode(query: string, signal: AbortSignal): Promise<Place[]> {
   const cacheKey = query.trim().toLowerCase();
   const hit = geocodeCache.get(cacheKey);
   if (hit) return hit;
 
-  const geo = await retryFast(
-    () =>
-      fetchJson(
-        `https://geocoding-api.open-meteo.com/v1/search?${new URLSearchParams({
-          name: query.split(",")[0].trim(),
-          count: "5",
-          language: "en",
-          format: "json",
-        })}`,
-        { timeoutMs: GEOCODE_TIMEOUT_MS, signal, fail: chaos("weather_all_down") },
-      ),
-    signal,
-    deadline,
-  );
+  const url = `https://geocoding-api.open-meteo.com/v1/search?${new URLSearchParams({
+    name: query.split(",")[0].trim(),
+    count: "5",
+    language: "en",
+    format: "json",
+  })}`;
+  const lookup = (s: AbortSignal) => fetchJson(url, { timeoutMs: GEOCODE_TIMEOUT_MS, signal: s, fail: chaos("weather_all_down") });
+  // No second geocoder, so hedge with a duplicate request: cuts the slow tail, free API, no quota.
+  const { value: geo } = await hedge(lookup, lookup, { delayMs: GEOCODE_HEDGE_MS, signal });
   const places = pickPlaces(geo, query);
   geocodeCache.set(cacheKey, places);
   return places;

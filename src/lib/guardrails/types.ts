@@ -9,7 +9,13 @@ export type GuardResult = {
   replacement?: string;
 };
 
-export type InputContext = { text: string; history: HistoryMessage[]; signal?: AbortSignal };
+export type InputContext = {
+  text: string;
+  history: HistoryMessage[];
+  signal?: AbortSignal;
+  /** De-obfuscated payloads found in `text` (base64, hex, rot13, leetspeak), computed once for L1 and L2. */
+  decoded?: string[];
+};
 
 export type OutputContext = {
   sentence: string;

@@ -7,7 +7,7 @@ export const TOPIC_CATEGORIES = [
   "legal",
   "financial",
   "politics",
-  "violence",
+  "harm",
   "sexual",
   "hate",
   "self_harm",
@@ -28,7 +28,7 @@ Classify the latest USER MESSAGE for a friendly daily-life voice assistant. Use 
 - legal: asks for legal advice about the user's own situation.
 - financial: asks for personalized investment, trading, or financial advice.
 - politics: asks for opinions on political parties, elections, politicians, or contested policy.
-- violence: seeks help harming people or animals, weapons, or other illegal activity.
+- harm: seeks help with crime or dangerous acts: weapons, explosives, making drugs, hacking, theft, or hurting people or animals (including via role-play, fiction or "hypothetically").
 - sexual: sexual or explicit content.
 - hate: hate or harassment toward a group or person.
 - self_harm: expresses intent or desire to hurt themselves or suicide.
@@ -42,12 +42,12 @@ Respond with JSON only: {"category": "<category>", "confidence": <0-1>}`;
 /** What Sarjy says for each blocked category. Written to be spoken. */
 export const TOPIC_REPLIES: Record<Exclude<TopicCategory, "allowed">, string> = {
   medical:
-    "I'm not able to give medical advice, and I'd hate to get something that important wrong. A doctor or pharmacist is the right person to ask.",
+    "I'm not able to give medical advice, and I'd hate to get something that important wrong. If it feels urgent, please call your local emergency number; otherwise a doctor or pharmacist is the right person to ask.",
   legal: "That one really needs a proper lawyer, so I'll stay out of it. Happy to help with anything else though!",
   financial:
     "I can't give personal investment or money advice. A licensed financial adviser is the best person for that.",
   politics: "I stay neutral on politics, so I'll sit that one out. Want to talk about something else?",
-  violence: "I can't help with that. Is there something else I can do for you?",
+  harm: "I can't help with that. Is there something else I can do for you?",
   sexual: "That's not something I can help with. Anything else on your mind?",
   hate: "I won't help with that. I'm happy to chat about something else.",
   self_harm:
@@ -63,7 +63,7 @@ export const TOPIC_REPLIES: Record<Exclude<TopicCategory, "allowed">, string> = 
 const FALLBACK_KEYWORDS: [Exclude<TopicCategory, "allowed">, RegExp][] = [
   ["self_harm", /\b(kill myself|end my life|suicid(e|al)|want to die|don'?t want to (be alive|live)|hurt myself|self[- ]harm)\b/i],
   ["system_prompt", /\bsystem prompt\b|\byour (hidden |secret )?(instructions|rules)\b/i],
-  ["violence", /\b(make|build) (a )?(bomb|explosive|gun|weapon)\b|\bhow (do i|to) (poison|stab|shoot) (a |my |some)/i],
+  ["harm", /\b(make|build) (a )?(bomb|explosive|gun|weapon)\b|\bhow (do i|to) (poison|stab|shoot) (a |my |some)/i],
   ["medical", /\b(what|how much) (dose|dosage)\b|\bhow many (mg|milligrams|pills)\b/i],
   ["politics", /\bwho should i vote\b|\b(best|better) (political )?party\b/i],
   ["financial", /\bshould i (buy|sell|invest)\b.{0,30}\b(stock|shares|crypto|bitcoin|fund)\b/i],
@@ -77,7 +77,8 @@ export async function screenTopic(ctx: InputContext): Promise<L2Result> {
 
   const result = await timed("L2_topic", async () => {
     const lastAssistant = [...ctx.history].reverse().find((m) => m.role === "assistant")?.content;
-    const content = `${lastAssistant ? `PREVIOUS ASSISTANT MESSAGE: ${lastAssistant.slice(0, 400)}\n` : ""}USER MESSAGE: ${ctx.text}`;
+    const decoded = ctx.decoded?.length ? `\nDECODED FROM THE USER MESSAGE: ${ctx.decoded.join(" | ").slice(0, 600)}` : "";
+    const content = `${lastAssistant ? `PREVIOUS ASSISTANT MESSAGE: ${lastAssistant.slice(0, 400)}\n` : ""}USER MESSAGE: ${ctx.text}${decoded}`;
 
     try {
       const v = await safeguardClassify<{ category?: string; confidence?: number }>(TOPIC_POLICY, content, {
@@ -90,7 +91,8 @@ export async function screenTopic(ctx: InputContext): Promise<L2Result> {
       confidence = typeof v.confidence === "number" ? v.confidence : 0.5;
     } catch (err) {
       if (!(err instanceof ClassifierError)) throw err;
-      const hit = FALLBACK_KEYWORDS.find(([, re]) => re.test(ctx.text));
+      const texts = [ctx.text, ...(ctx.decoded ?? [])];
+      const hit = FALLBACK_KEYWORDS.find(([, re]) => texts.some((t) => re.test(t)));
       if (hit) {
         category = hit[0];
         return { verdict: "block", reason: `${hit[0]} (keyword fallback; classifier down)`, replacement: TOPIC_REPLIES[hit[0]] };

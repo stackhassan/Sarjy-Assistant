@@ -1,4 +1,4 @@
-import { screenJailbreak, HEURISTIC_ASSIST_THRESHOLD } from "./l1-input";
+import { decodeVariants, HEURISTIC_ASSIST_THRESHOLD, normalize, screenJailbreak } from "./l1-input";
 import { MIN_BLOCK_CONFIDENCE, screenTopic } from "./l2-topic";
 import type { GuardResult, InputContext } from "./types";
 
@@ -19,7 +19,9 @@ export type InputScreen = {
  * on a normal turn they finish before the first sentence is ready.
  */
 export async function screenInput(ctx: InputContext): Promise<InputScreen> {
-  const [l1, l2] = await Promise.all([screenJailbreak(ctx), screenTopic(ctx)]);
+  // Decode once (sync, <1 ms) so L2 judges what an obfuscated message actually asks for.
+  const withDecoded = { ...ctx, decoded: ctx.decoded ?? decodeVariants(normalize(ctx.text)) };
+  const [l1, l2] = await Promise.all([screenJailbreak(withDecoded), screenTopic(withDecoded)]);
   const results: GuardResult[] = [l1, l2];
 
   const reasons: string[] = [];

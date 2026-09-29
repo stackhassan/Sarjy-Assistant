@@ -1,0 +1,35 @@
+name: Live evals
+
+# Live evals hit real Groq + weather APIs and take ~30 min on the free tier,
+# so they run on demand rather than on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "guardrails | latency | reliability | all"
+        default: all
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run evals:${{ inputs.suite }}
+        if: inputs.suite != 'all'
+      - run: npm run evals:guardrails && npm run evals:reliability && npm run evals:latency
+        if: inputs.suite == 'all'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-reports
+          path: |
+            docs/evals/*.md
+            evals/results/*.json

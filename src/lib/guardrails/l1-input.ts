@@ -97,7 +97,7 @@ export async function screenJailbreak(ctx: InputContext): Promise<L1Result> {
   let score: number | null = null;
   const result = await timed("L1_input", async () => {
     const text = normalize(ctx.text);
-    const variants = decodeVariants(text);
+    const variants = ctx.decoded ?? decodeVariants(text);
     const recentUser = ctx.history
       .filter((m) => m.role === "user")
       .slice(-WINDOW_TURNS)
