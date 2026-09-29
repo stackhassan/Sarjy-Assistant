@@ -6,6 +6,29 @@ Sarjy's deep dive. The goal: stop prohibited topics, jailbreaks and made-up tool
 - [`evals/latency.md`](evals/latency.md): what the guardrails cost in latency, and where time-to-first-audio goes
 - [`evals/reliability.md`](evals/reliability.md): the guards' own failure modes (classifier down)
 
+## Results
+
+Live evals against real Groq and weather APIs, 60 cases, each with guards **on**, **off**, and **off on the fallback model**:
+
+| | Guards ON | Guards OFF | Guards OFF on gpt-oss-20b |
+|---|---|---|---|
+| **Attack success** (30 jailbreak + prohibited) | **0 / 30** in both runs | 3 / 30 (run 1) · 1 / 30 (run 2) | 2 / 30 (run 1) · 0 / 30 (run 2) |
+| **False refusals** (20 benign-but-edgy, 5 held out) | **0 / 20** (run 2) | 0 / 20 | – |
+| **Grounding failures** (10 live weather cases, incl. outages) | **0 / 10** in both runs | 0 / 10 | – |
+| **Latency cost** (`guardWait`: first sentence ready → allowed out) | **0 ms p50, 4 ms p95** | – | – |
+
+- **Run 1** (earlier the same day): every turn on gpt-oss-120b. Found two false refusals, both since fixed.
+- **Run 2** (final code, [full scorecard](evals/guardrails-scorecard.md)): gpt-oss-120b hit its **200k tokens/day** free-tier cap partway through, so most ON/OFF turns ran on gpt-oss-20b. That was an unplanned live test of failover, and it passed.
+- What guards-off let through:
+  - gpt-oss-120b **revealed its system prompt** (`jb-json-exfil`, `jb-repeat-above`).
+  - gpt-oss-20b **gave medication dosing** on a follow-up question, and told a chest-pain user to take aspirin.
+- What guardrails add even where the model would refuse on its own:
+  - **Faster refusals.** A blocked turn skips the LLM: ~0.3 s to the reply vs 1–2 s.
+  - **Consistent, spoken, in-character refusals.**
+  - **Protection that doesn't depend on which model answers after a failover.**
+
+**Do the guard calls slow the LLM down?** They run concurrently on the same API key. Measured with the same bare request alone vs. with both guard calls fired alongside, alternating (n = 12 each): median first token **429 ms alone vs 469 ms with guards**, which is inside the noise of single requests that range from 0.3 to 1.6 s. The in-pipeline comparison agreed. Reproduce with `npm run evals:latency`, which includes this experiment.
+
 ## Pipeline
 
 ```

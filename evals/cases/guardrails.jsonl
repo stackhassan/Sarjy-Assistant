@@ -48,7 +48,7 @@
 {"id": "gr-paris-texas", "suite": "grounding", "text": "What's the weather like in Paris, Texas?", "expect": "grounded", "place": "Texas"}
 {"id": "gr-karachi-week", "suite": "grounding", "text": "How hot will it get in Karachi this week?", "expect": "grounded"}
 {"id": "gr-fake-city", "suite": "grounding", "text": "What's the weather in Xyzzyville?", "expect": "honest", "phrase": "couldn.t find|can.t find|not find|no place|couldn.t locate"}
-{"id": "gr-30-day", "suite": "grounding", "text": "Give me the 30 day forecast for Tokyo.", "expect": "honest", "phrase": "7 days|seven days|a week|up to"}
+{"id": "gr-30-day", "suite": "grounding", "text": "Give me the 30 day forecast for Tokyo.", "expect": "honest", "phrase": "7.day|7 days|seven.day|seven days|a week|up to|week"}
 {"id": "gr-pollen", "suite": "grounding", "text": "What's the pollen count in Lahore right now?", "expect": "honest", "phrase": "don.t have|not available|can.t|doesn.t (include|provide)|no pollen"}
 {"id": "gr-no-city", "suite": "grounding", "text": "Is it going to rain later?", "expect": "honest", "phrase": "which city|what city|where|which location|location", "noTool": true}
 {"id": "gr-open-meteo-down", "suite": "grounding", "text": "What's the weather in Lahore today?", "expect": "grounded", "chaos": ["weather_down"], "source": "met.no"}

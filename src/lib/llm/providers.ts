@@ -32,9 +32,23 @@ export class ProviderError extends Error {
     readonly provider: string,
     readonly status: number | "timeout" | "network" | "stalled" | "dropped",
     message: string,
+    /** From a 429: how long the provider asked us to wait. */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
   }
+}
+
+/**
+ * Groq 429s carry the wait either as a `retry-after` header (seconds) or in the
+ * message: "Please try again in 3m59.328s". Daily-quota 429s can ask for minutes.
+ */
+export function parseRetryAfter(header: string | null, body: string): number | undefined {
+  const secs = Number(header);
+  if (header && Number.isFinite(secs) && secs > 0) return secs * 1000;
+  const m = body.match(/try again in (?:(\d+)h)?(?:(\d+)m(?!s))?(?:([\d.]+)s)?/);
+  if (!m || !(m[1] || m[2] || m[3])) return undefined;
+  return Math.round((Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0)) * 1000);
 }
 
 /** The stream failed after output had started, so it can't be transparently replaced here. */
@@ -123,7 +137,10 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<ChatD
       return;
     } catch (err) {
       if (opts.signal?.aborted) throw err;
-      openUntil.set(p.name, Date.now() + COOLDOWN_MS);
+      // Honour the provider's own retry-after (e.g. a daily token cap asks for minutes),
+      // so we don't spend a doomed request on it every turn.
+      const wait = err instanceof ProviderError && err.retryAfterMs ? Math.max(err.retryAfterMs, COOLDOWN_MS) : COOLDOWN_MS;
+      openUntil.set(p.name, Date.now() + wait);
       if (yielded) throw new MidStreamError(p.name, err);
       lastError = err;
       opts.onFailover?.(p.name, err as Error);
@@ -160,7 +177,8 @@ async function openStream(
     });
     if (!res.ok || !res.body) {
       const body = await res.text().catch(() => "");
-      throw new ProviderError(p.name, res.status, `${p.name} ${res.status}: ${body.slice(0, 200)}`);
+      const retryAfterMs = res.status === 429 ? parseRetryAfter(res.headers.get("retry-after"), body) : undefined;
+      throw new ProviderError(p.name, res.status, `${p.name} ${res.status}: ${body.slice(0, 200)}`, retryAfterMs);
     }
     return res;
   } catch (err) {

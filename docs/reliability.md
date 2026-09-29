@@ -4,6 +4,14 @@ Principle: **every failure ends in something useful and honest being said, quick
 
 Measured results, with faults injected into live turns: [`evals/reliability.md`](evals/reliability.md).
 
+> That report is from the 13:28 UTC run. Its ❌ rows were followed up:
+> - **"none" and "guards unavailable"** were grader false alarms. "Cats make over 100 sounds" on a chat turn was flagged as ungrounded; the grader now only checks turns that used a tool.
+> - **"all weather sources down, cached"** was a real bug. The model read out a stale forecast without saying so. The server now speaks the disclaimer itself, covered by the unit test `always discloses stale weather before the answer`.
+>
+> It wasn't re-run the same day because gpt-oss-120b had used its 200k tokens/day free-tier cap. A "healthy" baseline would have failed over to 20b, and primary-only faults couldn't be exercised. Re-run with `npm run evals:reliability` once the quota resets.
+
+**Unplanned live test.** During the final guardrail eval, the primary model hit that daily cap, and 73 of 120 turns were served by the fallback model with no errors and no user-visible change. 429s now honour the provider's retry-after (a daily-cap 429 asks for minutes), so the breaker skips the capped model for that long instead of spending a doomed request every 30 s.
+
 ## Failure handling by component
 
 | Component | Failure | What happens | What the user hears | Latency cost |
