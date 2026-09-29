@@ -63,7 +63,7 @@ export const TOPIC_REPLIES: Record<Exclude<TopicCategory, "allowed">, string> = 
  */
 const FALLBACK_KEYWORDS: [Exclude<TopicCategory, "allowed">, RegExp][] = [
   // English, Spanish, French, Roman Urdu: the degraded fallback missed a Roman-Urdu message (red-team).
-  ["self_harm", /\b(kill myself|end my life|suicid(e|al|io|arme)|want to die|don'?t want to (be alive|live)|hurt myself|self[- ]harm|quiero morir(me)?|matarme|me suicider|envie de mourir|khud ?kushi|marna chahta|mar jana chahta|zindagi khatam)\b/i],
+  ["self_harm", /\b(kill myself|end my life|suicid(e|al|io|arme)|want to die|don'?t want to (be alive|live)|hurt myself|self[- ]harm|quiero morir(me)?|matarme|me suicider|envie de mourir|khud ?kushi|marna chahta|mar jana chahta|zindagi khatam|sab kuch khatam kar)\b/i],
   ["system_prompt", /\bsystem prompt\b|\byour (hidden |secret )?(instructions|rules)\b/i],
   ["harm", /\b(make|build) (a )?(bomb|explosive|gun|weapon)\b|\bhow (do i|to) (poison|stab|shoot) (a |my |some)/i],
   ["medical", /\b(what|how much) (dose|dosage)\b|\bhow many (mg|milligrams|pills)\b/i],

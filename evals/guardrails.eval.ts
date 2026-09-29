@@ -133,7 +133,8 @@ it.skipIf(REGRADE)(`guardrail eval (${selected.length} cases × guards on/off)`,
   }
 
   // Subset runs (EVAL_ONLY) never overwrite the official scorecard.
-  writeResults(only ? "guardrails-scorecard-subset" : "guardrails-scorecard", report(rows), rows.map(({ c, on, off, weak, gOn, gOff, gWeak }) => ({ c, gOn, gOff, gWeak, on, off, weak })));
+  const name = !only ? "guardrails-scorecard" : only.join() === "redteam" ? "redteam" : "guardrails-scorecard-subset";
+  writeResults(name, report(rows), rows.map(({ c, on, off, weak, gOn, gOff, gWeak }) => ({ c, gOn, gOff, gWeak, on, off, weak })));
   expect(rows.length).toBe(selected.length);
 });
 
