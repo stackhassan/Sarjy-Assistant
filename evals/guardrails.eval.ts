@@ -42,7 +42,8 @@ type Case = {
   heldOut?: boolean;
 };
 
-type Graded = { pass: boolean; note: string };
+/** `inconclusive`: the model never answered (e.g. rate-limited), so nothing was tested. Never counted as a pass. */
+type Graded = { pass: boolean; note: string; inconclusive?: boolean };
 
 const cases: Case[] = readFileSync("evals/cases/guardrails.jsonl", "utf8")
   .split("\n")
@@ -53,6 +54,9 @@ const only = process.env.EVAL_ONLY?.split(",");
 const selected = only ? cases.filter((c) => only.some((o) => c.id.startsWith(o) || c.suite === o)) : cases;
 
 async function grade(c: Case, run: TurnRun): Promise<Graded> {
+  // A guard block is a real result even if the LLM also failed. Otherwise an errored turn
+  // tested nothing: its fallback line ("trouble thinking…") must not be graded as a refusal.
+  if (run.error && !run.blockedBy) return { pass: false, inconclusive: true, note: `inconclusive: ${run.error.slice(0, 40)}` };
   switch (c.expect) {
     case "block":
     case "support": {
@@ -109,7 +113,7 @@ const isAttack = (c: Case) => c.suite === "jailbreak" || c.suite === "prohibited
  * Used after fixing a grader bug, so quota isn't spent re-running 120 live turns.
  */
 const REGRADE = process.env.EVAL_REGRADE === "1";
-const SAVED = "evals/results/guardrails-scorecard.json";
+const SAVED = `evals/results/${process.env.EVAL_ONLY === "redteam" ? "redteam" : "guardrails-scorecard"}.json`;
 
 it.runIf(REGRADE && existsSync(SAVED))("re-grade saved guardrail run", async () => {
   const saved = JSON.parse(readFileSync(SAVED, "utf8")) as Row[];
@@ -118,9 +122,15 @@ it.runIf(REGRADE && existsSync(SAVED))("re-grade saved guardrail run", async () 
   const rows: Row[] = [];
   for (const r of saved) {
     const c = latest.get(r.c.id) ?? r.c; // pick up case-file fixes (e.g. expected phrases)
-    rows.push(deterministic.has(c.expect) ? { ...r, c, gOn: await grade(c, r.on), gOff: r.off ? await grade(c, r.off) : undefined } : { ...r, c });
+    // Deterministic suites are re-graded; judged grades are kept, except that errored turns become inconclusive.
+    const inconclusive = (t: TurnRun | undefined, g: Graded | undefined) => (t && t.error && !t.blockedBy ? { pass: false, inconclusive: true, note: "inconclusive: LLM unavailable" } : g);
+    rows.push(
+      deterministic.has(c.expect)
+        ? { ...r, c, gOn: await grade(c, r.on), gOff: r.off ? await grade(c, r.off) : undefined }
+        : { ...r, c, gOn: inconclusive(r.on, r.gOn)!, gOff: inconclusive(r.off, r.gOff) },
+    );
   }
-  writeResults("guardrails-scorecard", report(rows), rows);
+  writeResults(process.env.EVAL_ONLY === "redteam" ? "redteam" : "guardrails-scorecard", report(rows), rows);
   expect(rows.length).toBe(saved.length);
 });
 
@@ -139,7 +149,7 @@ it.skipIf(REGRADE)(`guardrail eval (${selected.length} cases × guards on/off)`,
     const [gOn, gOff] = [await grade(c, on), off ? await grade(c, off) : undefined];
     const gWeak = weak ? await grade(c, weak) : undefined;
     rows.push({ c, on, off, gOn, gOff, weak, gWeak });
-    console.log(`${gOn.pass ? "✓" : "✗"} ${c.id.padEnd(24)} ON: ${gOn.note.padEnd(40)} OFF: ${(gOff?.note ?? "skipped").padEnd(40)}${gWeak ? ` OFF/20b: ${gWeak.note}` : ""}`);
+    console.log(`${gOn.inconclusive ? "?" : gOn.pass ? "✓" : "✗"} ${c.id.padEnd(24)} ON: ${gOn.note.padEnd(40)} OFF: ${(gOff?.note ?? "skipped").padEnd(40)}${gWeak ? ` OFF/20b: ${gWeak.note}` : ""}`);
   }
 
   // Subset runs (EVAL_ONLY) never overwrite the official scorecard.
@@ -147,6 +157,8 @@ it.skipIf(REGRADE)(`guardrail eval (${selected.length} cases × guards on/off)`,
   writeResults(name, report(rows), rows.map(({ c, on, off, weak, gOn, gOff, gWeak }) => ({ c, gOn, gOff, gWeak, on, off, weak })));
   expect(rows.length).toBe(selected.length);
 });
+
+const icon = (g: Graded) => (g.inconclusive ? "⚪" : g.pass ? "✅" : "❌");
 
 function mix(runs: TurnRun[]): string {
   const counts = new Map<string, number>();
@@ -163,11 +175,15 @@ function report(rows: Row[]): string {
   const benign = bySuite("benign_edge");
   const grounding = bySuite("grounding");
   const redteam = bySuite("redteam");
-  const fails = (rs: Row[], k: "gOn" | "gOff" | "gWeak") => rs.filter((r) => r[k] && !r[k]!.pass).length;
+  const fails = (rs: Row[], k: "gOn" | "gOff" | "gWeak") => rs.filter((r) => r[k] && !r[k]!.pass && !r[k]!.inconclusive).length;
   const weakRuns = attacks.filter((r) => r.weak?.provider === "groq/gpt-oss-20b").length;
 
   const ttfs = (rs: Row[], k: "on" | "off") => rs.map((r) => r[k]?.timings.firstSentence).filter((n): n is number => n !== undefined);
-  const rateK = (rs: Row[], k: "gOn" | "gOff" | "gWeak") => rate(fails(rs, k), rs.filter((r) => r[k]).length);
+  const rateK = (rs: Row[], k: "gOn" | "gOff" | "gWeak") => {
+    const graded = rs.filter((r) => r[k] && !r[k]!.inconclusive);
+    const skipped = rs.filter((r) => r[k]?.inconclusive).length;
+    return `${rate(fails(rs, k), graded.length)}${skipped ? ` + ${skipped} inconclusive` : ""}`;
+  };
   const fallbackTurns = rows.flatMap((r) => (r.off ? [r.on, r.off] : [r.on])).filter((t) => t.provider && t.provider !== PRIMARY).length;
   const layerCounts = attacks.reduce<Record<string, number>>((m, r) => {
     const k = r.on.blockedBy ?? (r.gOn.pass ? "model refused" : "not stopped");
@@ -181,7 +197,7 @@ function report(rows: Row[]): string {
       "|---|---|---|---|---|",
       ...rs.map(
         (r) =>
-          `| \`${r.c.id}\`${r.c.heldOut ? " _(held-out)_" : ""} | ${r.gOn.pass ? "✅" : "❌"} ${truncate(r.gOn.note, 60)} | ${r.gOff ? `${r.gOff.pass ? "✅" : "❌"} ${truncate(r.gOff.note, 60)}` : "–"} | ${r.gWeak ? `${r.gWeak.pass ? "✅" : "❌"} ${truncate(r.gWeak.note, 50)}` : "–"} | ${fmt(r.on.timings.firstSentence)} / ${fmt(r.off?.timings.firstSentence ?? NaN)} |`,
+          `| \`${r.c.id}\`${r.c.heldOut ? " _(held-out)_" : ""} | ${icon(r.gOn)} ${truncate(r.gOn.note, 60)} | ${r.gOff ? `${icon(r.gOff)} ${truncate(r.gOff.note, 60)}` : "–"} | ${r.gWeak ? `${icon(r.gWeak)} ${truncate(r.gWeak.note, 50)}` : "–"} | ${fmt(r.on.timings.firstSentence)} / ${fmt(r.off?.timings.firstSentence ?? NaN)} |`,
       ),
     ].join("\n");
 
