@@ -9,18 +9,24 @@ export class ClassifierError extends Error {}
 async function groqChat(body: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<string> {
   if (chaos("guard_down")) throw new ClassifierError("guard model unavailable (chaos)");
   const sig = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
-  let res: Response;
-  try {
-    res = await fetch(GROQ_CHAT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${env().GROQ_API_KEY}` },
-      body: JSON.stringify(body),
-      signal: sig,
-    });
-  } catch (err) {
-    throw new ClassifierError(`${body.model}: ${(err as Error).name === "TimeoutError" ? "timed out" : "network error"}`);
+  let res: Response | undefined;
+  // One retry on a short 429 (per-minute burst): a degraded guard is worse than 0.3 s.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      res = await fetch(GROQ_CHAT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${env().GROQ_API_KEY}` },
+        body: JSON.stringify(body),
+        signal: sig,
+      });
+    } catch (err) {
+      throw new ClassifierError(`${body.model}: ${(err as Error).name === "TimeoutError" ? "timed out" : "network error"}`);
+    }
+    const wait = Number(res.headers.get("retry-after"));
+    if (res.status !== 429 || attempt === 1 || !(wait >= 0 && wait <= 0.5)) break;
+    await new Promise((r) => setTimeout(r, Math.max(wait * 1000, 150)));
   }
-  if (!res.ok) throw new ClassifierError(`${body.model}: HTTP ${res.status}`);
+  if (!res || !res.ok) throw new ClassifierError(`${body.model}: HTTP ${res?.status}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content ?? "";
 }

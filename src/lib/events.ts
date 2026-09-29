@@ -24,10 +24,10 @@ export type TurnEvent =
       provider?: string;
       timings: Record<string, number>;
       guardsBypassed?: boolean;
-      /** Everything Sarjy said this turn, signed; the client sends it back as history. */
-      assistant: { text: string; sig: string };
+      /** Everything Sarjy said this turn, chain-signed; the client sends it back as history. */
+      assistant: { text: string; sig: string; prev: string };
     }
   | { type: "error"; stage: string; message: string; spokenFallback: string; sig: string };
 
-/** Assistant turns must carry the server's `sig` from `done.assistant`, or they are dropped. */
-export type HistoryMessage = { role: "user" | "assistant"; content: string; sig?: string };
+/** Assistant turns must carry the server's `sig` and `prev` from `done.assistant`, or they are dropped. */
+export type HistoryMessage = { role: "user" | "assistant"; content: string; sig?: string; prev?: string };

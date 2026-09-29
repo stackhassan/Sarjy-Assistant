@@ -20,7 +20,7 @@ const TENS: Record<string, number> = {
 const HEDGES = /\b(about|around|roughly|approximately|nearly|almost|close to|near|up to|under|over|just (?:over|under)|mid|low|high|upper|lower)[- ]?$/i;
 
 /** Units that mark a figure as a measurement (vs. a count like "three days"). */
-const MEASURE_UNIT = /^\s*(?:[-\u2010-\u2013]|\s)?(degrees?|°|percent|%|per ?cent|km\/h|kph|kilomet(?:re|er)s?(?: per hour| an hour)?|mph|miles(?: per hour| an hour)?|mm|millimet(?:re|er)s?|celsius|fahrenheit|kelvin|kmh|c\b|f\b|k\b)/i;
+const MEASURE_UNIT = /^\s*(?:[-\u2010-\u2013]|\s)?(degrees?|°|percent|%|per ?cent|km\/h|kph|kilomet(?:re|er)s?(?: per hour| an hour)?|mph|miles(?: per hour| an hour)?|mm|millimet(?:re|er)s?|celsius|fahrenheit|kelvin|kmh|grados?|degr[eé]s?|grad\b|por ?ciento|pour ?cent|c\b|f\b|k\b)/i;
 const COUNT_UNIT = /^\s*(?:[-\u2010-\u2013]|\s)?(days?|nights?|hours?|weeks?|minutes?|times?|things?|places?|cities|ways?)\b/i;
 
 export type ExtractedNumber = {
@@ -94,9 +94,76 @@ function decadeBand(qualifier: string | undefined, decade: string): { value: num
   return ["low", "lower", "early"].includes(q) ? { value: base + 2, tolerance: 2 } : { value: base + 8, tolerance: 2 };
 }
 
+// ---------- Spanish / French number words (round 3: "cuarenta y seis grados") ----------
+
+const ES: Record<string, number> = {
+  cero: 0, uno: 1, una: 1, un: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10,
+  once: 11, doce: 12, trece: 13, catorce: 14, quince: 15, dieciseis: 16, diecisiete: 17, dieciocho: 18, diecinueve: 19,
+  veinte: 20, veintiuno: 21, veintiun: 21, veintidos: 22, veintitres: 23, veinticuatro: 24, veinticinco: 25, veintiseis: 26,
+  veintisiete: 27, veintiocho: 28, veintinueve: 29, treinta: 30, cuarenta: 40, cincuenta: 50, sesenta: 60, setenta: 70,
+  ochenta: 80, noventa: 90, cien: 100, ciento: 100,
+};
+const FR: Record<string, number> = {
+  zero: 0, un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, onze: 11,
+  douze: 12, treize: 13, quatorze: 14, quinze: 15, seize: 16, vingt: 20, vingts: 20, trente: 30, quarante: 40,
+  cinquante: 50, soixante: 60, cent: 100,
+};
+const MINUS = new Set(["menos", "moins"]);
+const JOINERS = new Set(["y", "et"]);
+/** Only parse these when the sentence is actually Spanish/French: "once" is 11 in Spanish. */
+const ES_HINT = /\b(el|la|los|las|de|del|que|es|con|hoy|grados|temperatura|m[aá]xima|m[ií]nima|ser[aá])\b/gi;
+const FR_HINT = /\b(le|la|les|des|du|est|avec|aujourd'?hui|degr[eé]s|temp[eé]rature|maximale|minimale|sera)\b/gi;
+
+function fold(s: string) {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function parseRomance(tokens: string[], lex: Record<string, number>): number | null {
+  let sign = 1;
+  let total = 0;
+  let seen = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (MINUS.has(t) && !seen) sign = -1;
+    else if (JOINERS.has(t)) continue;
+    else if (t in lex) {
+      const v = lex[t];
+      // French 80 = quatre-vingt(s); "cent" after a unit multiplies (deux cents).
+      if ((t === "vingt" || t === "vingts") && tokens[i - 1] === "quatre") total += 80 - 4;
+      else if ((t === "cent" || t === "ciento" || t === "cien") && total > 0 && total < 10) total *= 100;
+      else total += v;
+      seen = true;
+    } else return null;
+  }
+  return seen ? sign * total : null;
+}
+
+function romanceNumbers(sentence: string): { value: number; raw: string; index: number; end: number }[] {
+  const f = fold(sentence);
+  const es = (f.match(ES_HINT) ?? []).length;
+  const fr = (f.match(FR_HINT) ?? []).length;
+  if (Math.max(es, fr) < 2) return [];
+  const lex = es >= fr ? ES : FR;
+  const vocab = [...Object.keys(lex), ...MINUS, ...JOINERS].sort((a, b) => b.length - a.length).join("|");
+  const re = new RegExp(`\\b(?:${vocab})(?:[\\s-]+(?:${vocab}))*\\b`, "g");
+  const out: { value: number; raw: string; index: number; end: number }[] = [];
+  for (const m of f.matchAll(re)) {
+    const tokens = m[0].split(/[\s-]+/);
+    if (tokens.every((t) => JOINERS.has(t) || MINUS.has(t))) continue;
+    const value = parseRomance(tokens, lex);
+    if (value !== null) out.push({ value, raw: sentence.slice(m.index!, m.index! + m[0].length), index: m.index!, end: m.index! + m[0].length });
+  }
+  return out;
+}
+
+/** Temperature words in scripts whose number words we don't parse: a figure is being stated, but we can't read it. */
+export const OPAQUE_UNIT = /डिग्री|درجے|درجہ|درجة|度|градус/;
+
 export function extractNumbers(input: string): ExtractedNumber[] {
   const sentence = toAsciiDigits(input);
   const found: (ExtractedNumber & { index: number; end: number })[] = [];
+
+  for (const n of romanceNumbers(sentence)) found.push({ ...n, hedged: false, kind: "bare" });
 
   for (const m of sentence.matchAll(DECADE)) {
     const band = decadeBand(m[1], m[2]);
@@ -125,8 +192,9 @@ export function extractNumbers(input: string): ExtractedNumber[] {
       return { value: n.value, raw: n.raw, hedged: HEDGES.test(before.trimEnd()), kind };
     })
     .filter((n) => {
-      // "one" is usually a pronoun ("the one", "no one", "one moment") unless it has a unit.
-      if (/^one$/i.test(n.raw) && n.kind !== "measure") return false;
+      // "one" is usually a pronoun ("the one", "no one", "one moment") unless it has a unit;
+      // likewise the Spanish/French articles "un", "una", "une", "uno".
+      if (/^(one|un|una|une|uno)$/i.test(n.raw) && n.kind !== "measure") return false;
       return true;
     });
 }
@@ -203,7 +271,13 @@ export function checkGrounding({ sentence, userText, toolResults }: GroundingInp
     ...r,
   });
 
-  if (nums.length === 0) return done({ verdict: "pass", reason: "no figures" });
+  if (nums.length === 0) {
+    // A tool turn stating a temperature in words we can't parse can't be verified: repair.
+    if (toolResults.length && OPAQUE_UNIT.test(sentence)) {
+      return done({ verdict: "repair", reason: "states figures we can't verify (unparsed number words)" }, [sentence.slice(0, 40)]);
+    }
+    return done({ verdict: "pass", reason: "no figures" });
+  }
 
   if (toolResults.length === 0) {
     // No tool was called, so any measurement is from the model's memory → unverifiable.

@@ -43,10 +43,61 @@ export function verifySentence(text: string, sig: string, now = Date.now()): boo
   return safeEqual(mac, hmac("sentence", `${exp}.${text}`));
 }
 
-export function signAssistantTurn(text: string): string {
-  return hmac("assistant-turn", text);
+/**
+ * Assistant-turn signatures are a hash chain: each covers the previous assistant
+ * turn's signature, the user messages that led to this reply, and the reply. A
+ * signed turn therefore only verifies in the conversation it came from. Round 3
+ * of the red-team got Sarjy to say a harmless "Deal, when you ask, I'll answer with
+ * just a name", then pasted that signed text after a prohibited ask elsewhere.
+ */
+export function signAssistantTurn(prev: string, userTurns: string[], text: string): string {
+  return hmac("assistant-turn-v2", JSON.stringify([prev, userTurns, text]));
 }
 
-export function verifyAssistantTurn(text: string, sig: string | undefined): boolean {
-  return !!sig && safeEqual(sig, signAssistantTurn(text));
+type SignedMessage = { role: "user" | "assistant"; content: string; sig?: string; prev?: string };
+
+/** Signs a whole conversation as the server would have, turn by turn (evals and tests). */
+export function signChain<T extends SignedMessage>(history: T[]): T[] {
+  let prev = "";
+  let pending: string[] = [];
+  return history.map((m) => {
+    if (m.role === "user") {
+      pending.push(m.content);
+      return m;
+    }
+    const sig = signAssistantTurn(prev, pending, m.content);
+    const signed = { ...m, sig, prev };
+    prev = sig;
+    pending = [];
+    return signed;
+  });
+}
+
+/**
+ * Keeps the longest prefix of `history` that ends in a verified assistant turn.
+ * Anything after the first bad link, including trailing user turns the server never
+ * answered, is dropped. The first turn in the window may cite a `prev` from before the
+ * window (clients send only recent turns); later turns must chain to the one before.
+ */
+export function verifyHistory<T extends SignedMessage>(history: T[]): { trusted: T[]; dropped: number } {
+  let good = 0;
+  let pending: string[] = [];
+  let expectedPrev: string | undefined;
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    if (m.role === "user") {
+      pending.push(m.content);
+      continue;
+    }
+    const prev = m.prev ?? "";
+    const ok =
+      !!m.sig &&
+      (expectedPrev === undefined || prev === expectedPrev) &&
+      safeEqual(m.sig, signAssistantTurn(prev, pending, m.content));
+    if (!ok) break;
+    good = i + 1;
+    expectedPrev = m.sig;
+    pending = [];
+  }
+  return { trusted: history.slice(0, good), dropped: history.length - good };
 }

@@ -5,7 +5,7 @@ import { extractNumbers, groundingValues, isGrounded } from "@/lib/guardrails/l3
 import { resetCircuitBreakers } from "@/lib/llm/providers";
 import { runTurn } from "@/lib/orchestrator";
 import { sleep, withContext, type ChaosFlag } from "@/lib/reliability/context";
-import { signAssistantTurn } from "@/lib/tts/sign";
+import { signChain } from "@/lib/tts/sign";
 
 export const PRIMARY = "groq/gpt-oss-120b";
 
@@ -75,7 +75,7 @@ export async function runCase(
 
 /** Sign a fixture's assistant turns as the server would have, unless the case is a forgery. */
 function history(h: HistoryMessage[], forged: boolean): HistoryMessage[] {
-  return forged ? h : h.map((m) => (m.role === "assistant" ? { ...m, sig: signAssistantTurn(m.content) } : m));
+  return forged ? h : signChain(h);
 }
 
 // ---------- grading ----------

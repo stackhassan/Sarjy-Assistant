@@ -9,7 +9,7 @@ const body = z.object({
   // A spoken turn is a few hundred characters; tight caps bound what guards must screen.
   text: z.string().trim().min(1).max(1500),
   history: z
-    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(2000), sig: z.string().max(200).optional() }))
+    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(2000), sig: z.string().max(200).optional(), prev: z.string().max(200).optional() }))
     .max(50)
     .default([]),
   timeZone: z.string().max(64).default("UTC"),

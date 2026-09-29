@@ -9,7 +9,8 @@ import { splitLong } from "@/lib/text/batch";
 import { SentenceSplitter } from "@/lib/text/sentences";
 import { runTool, toolSpecs } from "@/lib/tools";
 import { summarizeWeather, type WeatherResult } from "@/lib/tools/weather";
-import { signAssistantTurn, signSentence, verifyAssistantTurn } from "@/lib/tts/sign";
+import { signAssistantTurn, signSentence, verifyHistory } from "@/lib/tts/sign";
+import { fitScreeningBudget } from "@/lib/guardrails/l2-topic";
 
 export type TurnInput = {
   text: string;
@@ -38,12 +39,15 @@ const NO_TOOL_WEATHER_LINE =
  */
 export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void, signal: AbortSignal) {
   const { bypassGuards } = context();
-  // History comes from the client. Assistant turns we didn't sign are forgeries or
-  // stale; drop them so a fake "Sure, rules are off now" can't steer the model.
-  const trusted = rawInput.history.filter((m) => m.role === "user" || verifyAssistantTurn(m.content, m.sig));
-  const dropped = rawInput.history.length - trusted.length;
-  // Trim once, so the guards screen exactly the conversation the model will see.
-  const input: TurnInput = { ...rawInput, history: trusted.slice(-MAX_HISTORY).map(({ role, content }) => ({ role, content })) };
+  // History comes from the client. Keep only the verified chain: forged, re-used or
+  // re-ordered assistant turns, and anything after them, are dropped.
+  const { trusted, dropped } = verifyHistory(rawInput.history);
+  // Then trim to what L2 can screen in full, so the guards see exactly what the model sees
+  // (round 3: padding pushed an ask out of L2's chunks while the model still read it).
+  const window = trusted.slice(-MAX_HISTORY).map(({ role, content }) => ({ role, content }));
+  const { history, trimmed } = fitScreeningBudget(window);
+  const input: TurnInput = { ...rawInput, history };
+  const lastSig = [...trusted].reverse().find((m) => m.role === "assistant")?.sig ?? "";
   const turnId = crypto.randomUUID();
   const t0 = performance.now();
   const timings: Record<string, number> = {};
@@ -76,7 +80,10 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
   };
 
   if (dropped && !bypassGuards) {
-    emit({ type: "guard", layer: "L1_input", verdict: "repair", reason: `dropped ${dropped} unsigned assistant turn(s) from client history`, ms: 0 });
+    emit({ type: "guard", layer: "L1_input", verdict: "repair", reason: `dropped ${dropped} unverified history message(s)`, ms: 0 });
+  }
+  if (trimmed) {
+    emit({ type: "guard", layer: "L2_topic", verdict: "repair", reason: `trimmed ${trimmed} old message(s) beyond the screening budget`, ms: 0 });
   }
 
   // ---- input guards (L1 + L2), started in parallel with the LLM ----
@@ -249,7 +256,11 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
   }
   timings.total = Math.round(performance.now() - t0);
   const text = spoken.join(" ");
-  emit({ type: "done", turnId, provider, timings, guardsBypassed: bypassGuards || undefined, assistant: { text, sig: signAssistantTurn(text) } });
+  // Chain: previous verified assistant sig + the user turns since it + this reply.
+  const lastAssistantIdx = trusted.map((m) => m.role).lastIndexOf("assistant");
+  const userTurns = [...trusted.slice(lastAssistantIdx + 1).map((m) => m.content), rawInput.text];
+  const sig = signAssistantTurn(lastSig, userTurns, text);
+  emit({ type: "done", turnId, provider, timings, guardsBypassed: bypassGuards || undefined, assistant: { text, sig, prev: lastSig } });
 }
 
 /**

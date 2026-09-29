@@ -73,9 +73,29 @@ const FALLBACK_KEYWORDS: [Exclude<TopicCategory, "allowed">, RegExp][] = [
 
 export type L2Result = GuardResult & { category: TopicCategory | null; confidence: number | null };
 
+/**
+ * Drops the oldest messages until every earlier user turn fits in MAX_CHUNKS L2 calls.
+ * The orchestrator gives the model this same trimmed history, so nothing the model
+ * reads goes unscreened. Voice turns are short; this rarely trims anything.
+ */
+export function fitScreeningBudget<T extends { role: string; content: string }>(history: T[]): { history: T[]; trimmed: number } {
+  let start = 0;
+  const users = (from: number) => history.slice(from).filter((m) => m.role === "user").map((m) => m.content);
+  while (start < history.length && contextChunks(users(start)).length > MAX_CHUNKS) start++;
+  // Never start on an assistant reply without the user message it answered.
+  while (start < history.length && history[start].role === "assistant") start++;
+  return { history: history.slice(start), trimmed: start };
+}
+
 /** Earlier user turns per classifier call. Beyond this, context is split and classified in parallel. */
-const CONTEXT_CHUNK_CHARS = 1600;
-const MAX_CHUNKS = 6;
+const CONTEXT_CHUNK_CHARS = 2400;
+/**
+ * Hard cap on L2 calls per turn. Round 3 showed two problems with a larger cap: padding
+ * pushed the ask into a chunk that was silently dropped, and 6 parallel calls tripped the
+ * safeguard model's rate limit (degrading L2 with no fault header). So the budget is small
+ * and enforced the other way round: the *model's* history is trimmed to what fits.
+ */
+export const MAX_CHUNKS = 2;
 
 /**
  * Splits earlier user turns into chunks for classification. Every character is
@@ -112,7 +132,9 @@ export async function screenTopic(ctx: InputContext): Promise<L2Result> {
     const decoded = ctx.decoded?.length ? `\nDECODED FROM THE USER MESSAGE: ${ctx.decoded.join(" | ").slice(0, 600)}` : "";
     const tail = `${lastAssistant ? `PREVIOUS ASSISTANT MESSAGE: ${lastAssistant.slice(-400)}\n` : ""}USER MESSAGE: ${ctx.text}${decoded}`;
     const chunks = contextChunks(earlier);
-    const requests = (chunks.length ? chunks : [""]).slice(-MAX_CHUNKS).map((c) => `${c ? `EARLIER USER MESSAGES:\n${c}\n` : ""}${tail}`);
+    // fitScreeningBudget guarantees chunks.length <= MAX_CHUNKS; never drop one silently.
+    if (chunks.length > MAX_CHUNKS) throw new Error(`context exceeds screening budget (${chunks.length} chunks)`);
+    const requests = (chunks.length ? chunks : [""]).map((c) => `${c ? `EARLIER USER MESSAGES:\n${c}\n` : ""}${tail}`);
 
     try {
       const verdicts = await Promise.all(
