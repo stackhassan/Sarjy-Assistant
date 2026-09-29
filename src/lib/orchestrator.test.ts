@@ -238,6 +238,21 @@ describe("reliability end to end", () => {
     expect(of("recovery").filter((r) => r.stage === "guard")).toHaveLength(2);
   });
 
+  it("always discloses stale weather before the answer, whatever the model says", async () => {
+    install({
+      replies: [
+        { tool: { name: "get_weather", args: { location: "Lahore" } } },
+        { text: "It's twenty-six degrees." },
+        { tool: { name: "get_weather", args: { location: "Lahore" } } },
+        { text: "It's twenty-six degrees." },
+      ],
+    });
+    await turn("weather in Lahore?"); // warms the cache
+    const { spoken, of } = await turn("weather in Lahore?", { chaos: ["weather_all_down"] });
+    expect(of("recovery").some((r) => r.action === "stale cache")).toBe(true);
+    expect(spoken).toBe("Heads up: the live weather service is down, so this forecast is from just now. It's twenty-six degrees.");
+  });
+
   it("says the weather is unavailable instead of guessing when all sources fail", async () => {
     install({
       replies: [

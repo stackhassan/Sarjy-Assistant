@@ -34,7 +34,8 @@ export type ExtractedNumber = {
 const SEP = "[\\s\\u2010\\u2011\\u2012\\u2013-]";
 const WORD = `(?:${[...Object.keys(TENS), ...Object.keys(UNITS), "hundred", "minus", "negative"].join("|")})`;
 const WORD_NUMBER = new RegExp(`\\b${WORD}(?:${SEP}+(?:and${SEP}+)?${WORD})*\\b`, "gi");
-const DIGIT_NUMBER = /(?<![\w.])[-−]?\d+(?:[.,]\d+)?(?![\w])/g;
+// "5,500" is five thousand five hundred (thousands separator), "21.5" is a decimal.
+const DIGIT_NUMBER = /(?<![\w.,])[-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w])/g;
 
 function parseWords(raw: string): number | null {
   const words = raw.toLowerCase().split(/[\s‐-–-]+/).filter((w) => w && w !== "and");
@@ -70,7 +71,7 @@ export function extractNumbers(sentence: string): ExtractedNumber[] {
     found.push({ value, raw: m[0], index: m.index!, end: m.index! + m[0].length, hedged: false, kind: "bare" });
   }
   for (const m of sentence.matchAll(DIGIT_NUMBER)) {
-    const value = Number(m[0].replace("−", "-").replace(",", "."));
+    const value = Number(m[0].replace("−", "-").replace(/,/g, ""));
     if (Number.isFinite(value)) {
       found.push({ value, raw: m[0], index: m.index!, end: m.index! + m[0].length, hedged: false, kind: "bare" });
     }
@@ -135,8 +136,18 @@ function hasMeasurements(nums: ExtractedNumber[]): boolean {
 }
 
 /** Weather talk — used to decide whether an untooled figure is a forecast claim or general knowledge. */
-export const WEATHER_CONTEXT =
-  /\b(weather|forecast|temperatures?|rain(y|ing)?|sunny|snow(ing)?|wind(y)?|humid(ity)?|umbrella|cloud(y|s)?|storm|drizzle|showers?|hot|cold|chilly|warm|high of|low of|highs?|lows?)\b/i;
+const STRONG_WEATHER =
+  /\b(weather|forecast|rain(y|ing)?|sunny|snow(ing)?|wind(y)?|humid(ity)?|umbrella|cloud(y|s)?|storm|drizzle|showers?|high of|low of)\b/i;
+/**
+ * "Hot", "cold", "highs" are only weather talk about a place or time ("hot in Lahore",
+ * "cold tomorrow"). "How hot is the surface of the sun?" is not (eval-found false positive).
+ */
+const WEAK_WEATHER = /\b(hot|cold|chilly|warm|temperatures?|highs?|lows?)\b/i;
+const PLACE_OR_TIME = /\b(today|tonight|tomorrow|this (week|weekend|morning|afternoon|evening)|right now|outside|later|this time of year)\b|\bin [A-Z][a-z]+/;
+
+export function isWeatherTalk(text: string): boolean {
+  return STRONG_WEATHER.test(text) || (WEAK_WEATHER.test(text) && PLACE_OR_TIME.test(text));
+}
 
 export function checkGrounding({ sentence, userText, toolResults }: GroundingInput): GuardResult & { ungrounded: string[] } {
   const t0 = performance.now();
@@ -152,7 +163,7 @@ export function checkGrounding({ sentence, userText, toolResults }: GroundingInp
 
   if (toolResults.length === 0) {
     // No tool was called, so any measurement is from the model's memory → unverifiable.
-    const weatherTalk = WEATHER_CONTEXT.test(sentence) || WEATHER_CONTEXT.test(userText);
+    const weatherTalk = isWeatherTalk(sentence) || isWeatherTalk(userText);
     return hasMeasurements(nums) && weatherTalk
       ? done({ verdict: "repair", reason: "stated weather figures without calling the weather tool" }, nums.map((n) => n.raw))
       : done({ verdict: "pass", reason: "figures are general knowledge, not live data" });

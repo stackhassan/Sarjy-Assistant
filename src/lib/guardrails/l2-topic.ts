@@ -27,7 +27,7 @@ Classify the latest USER MESSAGE for a friendly daily-life voice assistant. Use 
 - medical: asks what a specific person should take or do: diagnosis, treatment, dosage, whether to stop a medication.
 - legal: asks for legal advice about the user's own situation.
 - financial: asks what the user should buy, sell or invest in.
-- politics: asks for opinions on political parties, elections, politicians, or contested policy.
+- politics: asks the assistant to take a side: which party, candidate or contested policy is better, or who to vote for.
 - harm: seeks help with crime or dangerous acts: weapons, explosives, making drugs, hacking, theft, or hurting people or animals (including via role-play, fiction or "hypothetically").
 - sexual: sexual or explicit content.
 - hate: hate or harassment toward a group or person.
@@ -36,7 +36,7 @@ Classify the latest USER MESSAGE for a friendly daily-life voice assistant. Use 
 
 ## Important: do NOT over-flag
 Figurative or technical language is allowed: "kill a process", "shoot a photo", "this song slaps", "Kill Devil Hills weather", "is it too hot to run".
-General, educational facts are allowed, as long as they are not advice for a specific person: "what is paracetamol for", "how does insulin work", "what is a mortgage", "how does a jury trial work".
+General, educational facts are allowed, as long as they are not advice for a specific person or a political opinion: "what is paracetamol for", "how does insulin work", "what is a mortgage", "how does a jury trial work", "how does the electoral college work", "what does a senator do".
 
 Respond with JSON only: {"category": "<category>", "confidence": <0-1>}`;
 

@@ -32,6 +32,34 @@ async function time<T>(fn: () => Promise<T>): Promise<number> {
   return Math.round(performance.now() - t0);
 }
 
+/** Time to first content delta for a bare chat request, optionally with the two guard calls fired alongside. */
+async function rawFirstToken(prompt: string, withGuards: boolean): Promise<number> {
+  const H = { "Content-Type": "application/json", Authorization: `Bearer ${process.env.GROQ_API_KEY}` };
+  const url = "https://api.groq.com/openai/v1/chat/completions";
+  const chat = (async () => {
+    const t0 = performance.now();
+    const res = await fetch(url, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ model: MODELS.chat, messages: [{ role: "user", content: prompt }], stream: true, reasoning_effort: "low" }),
+    });
+    const r = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await r.read();
+      if (done) return NaN;
+      buf += value;
+      if (buf.includes('"content":"')) {
+        r.cancel();
+        return Math.round(performance.now() - t0);
+      }
+    }
+  })();
+  if (!withGuards) return chat;
+  const [t] = await Promise.all([chat, promptGuardScore(prompt), safeguardClassify(TOPIC_POLICY, `USER MESSAGE: ${prompt}`, { timeoutMs: 5000 })]);
+  return t;
+}
+
 async function orpheus(text: string): Promise<{ ttfb: number; total: number; bytes: ArrayBuffer }> {
   const t0 = performance.now();
   const res = await fetch("https://api.groq.com/openai/v1/audio/speech", {
@@ -57,6 +85,17 @@ it("latency: guards on vs off, plus per-component timings", async () => {
         samples.push({ prompt: p, kind, guards, run });
         console.log(`${guards ? "ON " : "OFF"} ${kind.padEnd(7)} ttfs=${run.timings.firstSentence}ms wait=${run.timings.guardWait ?? "-"} ${run.provider}  ${p}`);
       }
+    }
+  }
+
+  // ---- does running the guards concurrently slow the LLM itself? (same prompt, alternating) ----
+  const aloneMs: number[] = [];
+  const withGuardsMs: number[] = [];
+  for (let i = 0; i < 10; i++) {
+    const p = CHAT[i % CHAT.length];
+    for (const g of i % 2 ? [false, true] : [true, false]) {
+      (g ? withGuardsMs : aloneMs).push(await rawFirstToken(p, g));
+      await sleep(2000);
     }
   }
 
@@ -91,15 +130,15 @@ it("latency: guards on vs off, plus per-component timings", async () => {
 
   writeResults(
     "latency",
-    report(samples, { pgMs, sgMs, sttMs, sttText, ttsTtfb, ttsTotal }),
-    { samples: samples.map((s) => ({ ...s, run: { timings: s.run.timings, guardMs: s.run.guardMs, provider: s.run.provider, spoken: s.run.spoken } })), pgMs, sgMs, sttMs, ttsTtfb, ttsTotal },
+    report(samples, { pgMs, sgMs, sttMs, sttText, ttsTtfb, ttsTotal, aloneMs, withGuardsMs }),
+    { samples: samples.map((s) => ({ ...s, run: { timings: s.run.timings, guardMs: s.run.guardMs, provider: s.run.provider, spoken: s.run.spoken } })), pgMs, sgMs, sttMs, ttsTtfb, ttsTotal, aloneMs, withGuardsMs },
   );
   expect(samples.length).toBe(prompts.length * REPS * 2);
 });
 
 function report(
   samples: Sample[],
-  c: { pgMs: number[]; sgMs: number[]; sttMs: number[]; sttText: string[]; ttsTtfb: number[]; ttsTotal: number[] },
+  c: { pgMs: number[]; sgMs: number[]; sttMs: number[]; sttText: string[]; ttsTtfb: number[]; ttsTotal: number[]; aloneMs: number[]; withGuardsMs: number[] },
 ): string {
   const clean = samples.filter((s) => s.run.provider === PRIMARY && s.run.timings.firstSentence !== undefined);
   const dropped = samples.length - clean.length;
@@ -146,7 +185,14 @@ ${one("L4 per sentence (deterministic tier; LLM tier only on risk)", l4)}
 ${one("Prompt Guard 2, standalone", c.pgMs)}
 ${one("gpt-oss-safeguard (topic policy), standalone", c.sgMs)}
 
-**Reading this:** input guards take ~${fmt(pct(inputGuards, 50))} ms but run *alongside* the LLM, whose first token takes ~${fmt(pct(firstToken, 50))} ms, so by the time a sentence is ready the guards are usually done. \`guardWait\` is the real cost users feel. If the guards ran *before* the LLM (the naive design) every turn would pay the full ~${fmt(pct(inputGuards, 50))} ms up front.
+**Reading this.** \`guardWait\` is the direct measure of what guardrails cost the user: how long a finished sentence sat waiting for L1/L2 (and L3/L4) before it could be spoken. Input guards take ~${fmt(pct(inputGuards, 50))} ms but run *alongside* the LLM, whose first token takes ~${fmt(pct(firstToken, 50))} ms, so they are almost always done first. If they ran *before* the LLM (the naive design), every turn would pay the full ~${fmt(pct(inputGuards, 50))} ms up front.
+
+The end-to-end ON/OFF rows above compare separate turns, so they include Groq's run-to-run variance. Its latency tail is heavy (single requests spike to 2-9 s), and with ~15-25 samples per arm the p50 difference is mostly noise. To isolate the one remaining way guards *could* cost time (the concurrent guard calls slowing the main LLM request on the same key), the same bare request was timed alone and with both guard calls fired alongside, alternating:
+
+| LLM first token (bare request) | p50 | p95 | n |
+|---|---|---|---|
+${one("alone", c.aloneMs)}
+${one("with Prompt Guard + safeguard running concurrently", c.withGuardsMs)}
 
 ## Time to first audio, broken down (p50)
 

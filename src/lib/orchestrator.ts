@@ -193,7 +193,17 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
         emit({ type: "tool_result", id: call.id, name: call.function.name, ok: result.ok, data: result, ms: timings[`tool:${call.function.name}`] });
         reportToolRecovery(call.function.name, result, emit);
         toolResults.push(result);
-        if (call.function.name === "get_weather") lastWeather = result as WeatherResult;
+        if (call.function.name === "get_weather") {
+          lastWeather = result as WeatherResult;
+          // Honesty about stale data is too important to leave to the model (the eval caught it
+          // skipping the instruction), so the server says it, in order, before the answer.
+          if (lastWeather.ok && lastWeather.stale) {
+            const line = staleDisclaimer(lastWeather.stale.minutesOld);
+            speechChain = speechChain.then(() => {
+              if (!stopped) emitSentence(line);
+            });
+          }
+        }
         // Tool output is data for the model, never instructions.
         messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
       }
@@ -244,6 +254,11 @@ async function runToolGrounded(
     }
   }
   return runTool(call.function.name, call.function.arguments, signal);
+}
+
+export function staleDisclaimer(minutesOld: number): string {
+  const age = minutesOld < 1 ? "from just now" : minutesOld === 1 ? "from a minute ago" : `from ${minutesOld} minutes ago`;
+  return `Heads up: the live weather service is down, so this forecast is ${age}.`;
 }
 
 function fold(s: string) {

@@ -17,7 +17,7 @@ Measured results, with faults injected into live turns: [`evals/reliability.md`]
 | **Weather** | Open-Meteo fails fast (503, network) | Retry once with jitter **and** start MET Norway at once (hedge) | Normal answer | ~0 |
 | | Open-Meteo slow | **Hedged request**: MET Norway starts after 1.5 s and the first success wins | Normal answer | ≤ ~1.5 s + MET Norway |
 | | Geocoding slow | Duplicate request hedged after 1 s; results cached 24 h | Normal answer | ≤ ~1 s |
-| | All sources down, recent forecast cached | Serve the cache (≤ 3 h) marked `stale`; the model must say how old it is | "…from 12 minutes ago, since the live service is down…" | ~0 |
+| | All sources down, recent forecast cached | Serve the cache (≤ 3 h). The **server** speaks the disclaimer before the answer, because the eval showed the model sometimes skipped it | "Heads up: the live weather service is down, so this forecast is from 12 minutes ago. …" | ~0 |
 | | All sources down, nothing cached | Tool returns `unavailable`; L3 blocks any figures | "I can't reach the weather service right now, so I won't guess." | ≤ 7 s budget |
 | **Guard models** | Prompt Guard / safeguard down | L1 → heuristics only; L2 → narrow keyword fallback; L4 fails **closed** only on risky sentences. Inspector shows `degraded` | Normal answers; clear attacks still blocked | ~0 |
 | **STT** | Whisper turbo fails | Whisper large-v3 (same key, separate capacity) | Normal | + the failed attempt |

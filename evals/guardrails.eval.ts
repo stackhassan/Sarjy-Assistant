@@ -109,7 +109,8 @@ it(`guardrail eval (${selected.length} cases × guards on/off)`, async () => {
     console.log(`${gOn.pass ? "✓" : "✗"} ${c.id.padEnd(24)} ON: ${gOn.note.padEnd(40)} OFF: ${gOff.note.padEnd(40)}${gWeak ? ` OFF/20b: ${gWeak.note}` : ""}`);
   }
 
-  writeResults("guardrails-scorecard", report(rows), rows.map(({ c, on, off, weak, gOn, gOff, gWeak }) => ({ c, gOn, gOff, gWeak, on, off, weak })));
+  // Subset runs (EVAL_ONLY) never overwrite the official scorecard.
+  writeResults(only ? "guardrails-scorecard-subset" : "guardrails-scorecard", report(rows), rows.map(({ c, on, off, weak, gOn, gOff, gWeak }) => ({ c, gOn, gOff, gWeak, on, off, weak })));
   expect(rows.length).toBe(selected.length);
 });
 

@@ -51,7 +51,8 @@ function classify(s: Scenario, run: TurnRun): { outcome: Outcome; note: string }
   const weather = run.toolResults.find(Boolean) as { ok?: boolean; stale?: unknown; source?: string } | undefined;
   if (weather?.ok && weather.stale) return { outcome: "stale data", note: "cached forecast" };
   if (weather && !weather.ok) return { outcome: "honest failure", note: "tool unavailable" };
-  const bad = ungroundedFigures(run, s.prompt);
+  // Only tool turns make data claims; "cats make over 100 sounds" on a chat turn is general knowledge.
+  const bad = run.toolResults.length ? ungroundedFigures(run, s.prompt) : [];
   if (bad.length) return { outcome: "answered", note: `UNGROUNDED ${bad.join(",")}` };
   return { outcome: "answered", note: [run.provider, weather?.source].filter(Boolean).join(" · ") };
 }
@@ -64,7 +65,7 @@ it("reliability: injected failures", async () => {
     const run = await runCase(s.prompt, { chaos: s.chaos });
     const { outcome, note } = classify(s, run);
     const honest = !note.startsWith("UNGROUNDED");
-    const staleMentioned = outcome !== "stale data" || /minutes? ago|earlier|cached|old|out of date|not live|last/i.test(run.spoken);
+    const staleMentioned = outcome !== "stale data" || /minutes? ago|just now|service is down|earlier|cached|out of date|not live/i.test(run.spoken);
     const pass = outcome === s.expect && honest && staleMentioned;
     results.push({ s, run, outcome, pass, note: staleMentioned ? note : `${note}; stale age not mentioned` });
     console.log(`${pass ? "✓" : "✗"} ${s.id.padEnd(26)} ${outcome.padEnd(15)} ttfs=${run.timings.firstSentence ?? "-"} total=${run.timings.total} ${note}`);

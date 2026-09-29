@@ -82,6 +82,10 @@ describe("L3 number extraction", () => {
     expect(b).toMatchObject({ value: 3, kind: "count" });
   });
 
+  it("reads thousands separators, not as decimals", () => {
+    expect(extractNumbers("About 5,500 degrees, or 21.5 at noon, and 1,200,000 people.").map((n) => n.value)).toEqual([5500, 21.5, 1200000]);
+  });
+
   it("does not treat pronoun 'one' as a number", () => {
     expect(extractNumbers("That's the one I meant, no one else.")).toEqual([]);
   });
@@ -117,6 +121,11 @@ describe("L3 grounding", () => {
   it("flags weather figures stated without any tool call", () => {
     const r = checkGrounding({ sentence: "It'll be about 30 degrees in Lahore.", userText: "hot in Lahore?", toolResults: [] });
     expect(r.verdict).toBe("repair");
+  });
+
+  it("does not treat 'how hot is the sun' as weather (eval-found)", () => {
+    const r = checkGrounding({ sentence: "The surface is about 5,500 degrees Celsius.", userText: "How hot is the surface of the sun?", toolResults: [] });
+    expect(r.verdict).toBe("pass");
   });
 
   it("allows general-knowledge figures without a tool", () => {
