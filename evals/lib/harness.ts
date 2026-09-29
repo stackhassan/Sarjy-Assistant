@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import type { HistoryMessage, TurnEvent } from "@/lib/events";
 import { safeguardClassify } from "@/lib/guardrails/classifiers";
-import { extractNumbers, groundingValues } from "@/lib/guardrails/l3-grounding";
+import { extractNumbers, groundingValues, isGrounded } from "@/lib/guardrails/l3-grounding";
 import { resetCircuitBreakers } from "@/lib/llm/providers";
 import { runTurn } from "@/lib/orchestrator";
 import { sleep, withContext, type ChaosFlag } from "@/lib/reliability/context";
@@ -126,8 +126,7 @@ export async function judgeCompliance(request: string, response: string): Promis
 export function ungroundedFigures(run: TurnRun, userText: string): string[] {
   const allowed = groundingValues(run.toolResults, userText);
   return extractNumbers(run.spoken)
-    .filter((n) => n.kind !== "count")
-    .filter((n) => !allowed.some((a) => Math.abs(a - n.value) <= (n.hedged ? 3 : 1)))
+    .filter((n) => !isGrounded(n, allowed))
     .map((n) => n.raw);
 }
 

@@ -28,6 +28,8 @@ export type ExtractedNumber = {
   raw: string;
   hedged: boolean;
   kind: "measure" | "count" | "bare";
+  /** Allowed distance from a tool value, when the phrase itself is a range ("upper thirties"). */
+  tolerance?: number;
 };
 
 // Hyphens (incl. non-breaking U+2011 and en dash) and spaces between number words.
@@ -65,8 +67,41 @@ function parseWords(raw: string): number | null {
   return seen ? sign * total : null;
 }
 
-export function extractNumbers(sentence: string): ExtractedNumber[] {
+/**
+ * Digits in other scripts → ASCII. Round 2 of the red-team got a Hindi reply with
+ * Devanagari numerals ("८८ °F") that L3 never saw. Each is one UTF-16 unit, so
+ * string positions are unchanged.
+ */
+const DIGIT_BLOCKS = [0x0660, 0x06f0, 0x07c0, 0x0966, 0x09e6, 0x0a66, 0x0ae6, 0x0b66, 0x0be6, 0x0c66, 0x0ce6, 0x0d66, 0x0e50, 0x0ed0, 0x0f20, 0x1040, 0xff10];
+export function toAsciiDigits(s: string): string {
+  return s.replace(/\p{Nd}/gu, (c) => {
+    const cp = c.codePointAt(0)!;
+    const base = DIGIT_BLOCKS.find((b) => cp >= b && cp <= b + 9);
+    return base === undefined ? c : String(cp - base);
+  });
+}
+
+/** "upper thirties", "mid-twenties", "the teens": a band, grounded if a tool value falls inside it. */
+const DECADES: Record<string, number> = { teens: 10, twenties: 20, thirties: 30, forties: 40, fifties: 50, sixties: 60, seventies: 70, eighties: 80, nineties: 90 };
+const DECADE = new RegExp(`\\b(?:(low|lower|early|mid|upper|high|late)${SEP}*)?(${Object.keys(DECADES).join("|")})\\b`, "gi");
+
+function decadeBand(qualifier: string | undefined, decade: string): { value: number; tolerance: number } {
+  const base = DECADES[decade.toLowerCase()];
+  const q = qualifier?.toLowerCase();
+  if (decade.toLowerCase() === "teens") return { value: 16, tolerance: 3 };
+  if (!q) return { value: base + 5, tolerance: 5 };
+  if (q === "mid") return { value: base + 5, tolerance: 2 };
+  return ["low", "lower", "early"].includes(q) ? { value: base + 2, tolerance: 2 } : { value: base + 8, tolerance: 2 };
+}
+
+export function extractNumbers(input: string): ExtractedNumber[] {
+  const sentence = toAsciiDigits(input);
   const found: (ExtractedNumber & { index: number; end: number })[] = [];
+
+  for (const m of sentence.matchAll(DECADE)) {
+    const band = decadeBand(m[1], m[2]);
+    found.push({ ...band, raw: m[0], index: m.index!, end: m.index! + m[0].length, hedged: true, kind: "measure" });
+  }
 
   for (const m of sentence.matchAll(WORD_NUMBER)) {
     const value = parseWords(m[0]);
@@ -86,6 +121,7 @@ export function extractNumbers(sentence: string): ExtractedNumber[] {
       const before = sentence.slice(Math.max(0, n.index - 24), n.index);
       const after = sentence.slice(n.end, n.end + 30);
       const kind: ExtractedNumber["kind"] = MEASURE_UNIT.test(after) ? "measure" : COUNT_UNIT.test(after) ? "count" : "bare";
+      if (n.tolerance !== undefined) return { value: n.value, raw: n.raw, hedged: true, kind: n.kind, tolerance: n.tolerance };
       return { value: n.value, raw: n.raw, hedged: HEDGES.test(before.trimEnd()), kind };
     })
     .filter((n) => {
@@ -100,15 +136,20 @@ export function extractNumbers(sentence: string): ExtractedNumber[] {
 /** Every number present in the tool results, plus parts of any dates/times. */
 export function groundingValues(toolResults: unknown[], userText: string): number[] {
   const values: number[] = [];
-  const walk = (v: unknown) => {
-    if (typeof v === "number" && Number.isFinite(v)) values.push(v);
+  const TEMPERATURE_KEYS = new Set(["temperature", "feelsLike", "high", "low"]);
+  const walk = (v: unknown, key?: string) => {
+    if (typeof v === "number" && Number.isFinite(v)) {
+      values.push(v);
+      // A correct °C↔°F conversion of a tool temperature is grounded; any other number is not.
+      if (key && TEMPERATURE_KEYS.has(key)) values.push((v * 9) / 5 + 32, ((v - 32) * 5) / 9);
+    }
     else if (typeof v === "string") {
       const date = v.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/);
       if (date) date.slice(1).filter(Boolean).forEach((p) => values.push(Number(p)));
-    } else if (Array.isArray(v)) v.forEach(walk);
-    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+    } else if (Array.isArray(v)) v.forEach((x) => walk(x, key));
+    else if (v && typeof v === "object") Object.entries(v).forEach(([k, x]) => walk(x, k));
   };
-  toolResults.forEach(walk);
+  toolResults.forEach((r) => walk(r));
   // Numbers the user said themselves may be repeated back ("in 3 days", "under 20 degrees?").
   for (const n of extractNumbers(userText)) values.push(n.value);
   return values;
@@ -120,7 +161,7 @@ const HEDGED_TOLERANCE = 3; // "around thirty" for 28
 export function isGrounded(n: ExtractedNumber, allowed: number[]): boolean {
   // Small counts ("three days", "7 day forecast") are structure, not data.
   if (n.kind === "count" && Math.abs(n.value) <= 16) return true;
-  const tol = n.hedged ? HEDGED_TOLERANCE : TOLERANCE;
+  const tol = n.tolerance ?? (n.hedged ? HEDGED_TOLERANCE : TOLERANCE);
   return allowed.some((a) => Math.abs(a - n.value) <= tol);
 }
 

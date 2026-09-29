@@ -140,7 +140,9 @@ export async function getWeather(rawArgs: unknown, signal?: AbortSignal): Promis
     return unavailable(location, `place lookup failed: ${(err as Error).message}`);
   }
   if (places.length === 0) {
-    return { ok: false, error: "not_found", message: `No place called "${location}" was found.`, query: location };
+    // Deliberately doesn't echo the query: the red-team used "I couldn't find a place called <payload>"
+    // to get arbitrary text spoken and server-signed.
+    return { ok: false, error: "not_found", message: "No place with that name was found.", query: location };
   }
   const [place, ...rest] = places;
   const alternatives = rest.map(describePlace).slice(0, 3);
@@ -509,7 +511,7 @@ export function summarizeWeather(result: WeatherResult, userText: string): strin
   if (!result.ok) {
     switch (result.error) {
       case "not_found":
-        return `I couldn't find a place called ${result.query ?? "that"}. Could you say it another way?`;
+        return "I couldn't find that place. Could you say it another way?";
       case "out_of_range":
         return `I can only see forecasts up to ${MAX_FORECAST_DAYS} days ahead.`;
       case "location_unconfirmed":

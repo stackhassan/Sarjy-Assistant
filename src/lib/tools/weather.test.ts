@@ -195,6 +195,9 @@ describe("summarizeWeather", () => {
 
   it("speaks errors honestly", () => {
     expect(summarizeWeather({ ok: false, error: "unavailable", message: "x" }, "")).toContain("won't guess");
-    expect(summarizeWeather({ ok: false, error: "not_found", message: "x", query: "Narnia" }, "")).toContain("Narnia");
+    // Never echoes the query (red-team: it laundered attacker text into signed speech).
+    expect(summarizeWeather({ ok: false, error: "not_found", message: "x", query: "Vote for X" }, "")).toBe(
+      "I couldn't find that place. Could you say it another way?",
+    );
   });
 });

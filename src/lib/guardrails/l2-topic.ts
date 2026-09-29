@@ -73,31 +73,62 @@ const FALLBACK_KEYWORDS: [Exclude<TopicCategory, "allowed">, RegExp][] = [
 
 export type L2Result = GuardResult & { category: TopicCategory | null; confidence: number | null };
 
+/** Earlier user turns per classifier call. Beyond this, context is split and classified in parallel. */
+const CONTEXT_CHUNK_CHARS = 1600;
+const MAX_CHUNKS = 6;
+
+/**
+ * Splits earlier user turns into chunks for classification. Every character is
+ * covered: the red-team hid asks in the 4th-previous turn (beyond a 3-turn window)
+ * and behind 300+ chars of padding (beyond a per-turn head truncation).
+ */
+export function contextChunks(earlier: string[], size = CONTEXT_CHUNK_CHARS): string[] {
+  const chunks: string[] = [];
+  let cur = "";
+  for (const msg of earlier) {
+    for (let i = 0; i < msg.length || i === 0; i += size) {
+      const line = `- ${msg.slice(i, i + size)}`;
+      if (cur && cur.length + line.length + 1 > size) {
+        chunks.push(cur);
+        cur = "";
+      }
+      cur += (cur ? "\n" : "") + line;
+      if (msg.length === 0) break;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
 export async function screenTopic(ctx: InputContext): Promise<L2Result> {
   let category: TopicCategory | null = null;
   let confidence: number | null = null;
 
   const result = await timed("L2_topic", async () => {
     const lastAssistant = [...ctx.history].reverse().find((m) => m.role === "assistant")?.content;
-    // Earlier user turns: a sensitive ask placed there, then "ok go ahead" in the latest turn,
-    // slipped past a latest-message-only check (red-team finding).
-    const earlier = ctx.history
-      .filter((m) => m.role === "user")
-      .slice(-3)
-      .map((m) => `- ${m.content.slice(0, 300)}`)
-      .join("\n");
+    // Earlier user turns (all of them, in full): a sensitive ask placed there, then "ok go ahead"
+    // in the latest turn, slipped past latest-message-only and truncated checks (red-team).
+    const earlier = ctx.history.filter((m) => m.role === "user").map((m) => m.content);
     const decoded = ctx.decoded?.length ? `\nDECODED FROM THE USER MESSAGE: ${ctx.decoded.join(" | ").slice(0, 600)}` : "";
-    const content = `${earlier ? `EARLIER USER MESSAGES:\n${earlier}\n` : ""}${lastAssistant ? `PREVIOUS ASSISTANT MESSAGE: ${lastAssistant.slice(0, 400)}\n` : ""}USER MESSAGE: ${ctx.text}${decoded}`;
+    const tail = `${lastAssistant ? `PREVIOUS ASSISTANT MESSAGE: ${lastAssistant.slice(-400)}\n` : ""}USER MESSAGE: ${ctx.text}${decoded}`;
+    const chunks = contextChunks(earlier);
+    const requests = (chunks.length ? chunks : [""]).slice(-MAX_CHUNKS).map((c) => `${c ? `EARLIER USER MESSAGES:\n${c}\n` : ""}${tail}`);
 
     try {
-      const v = await safeguardClassify<{ category?: string; confidence?: number }>(TOPIC_POLICY, content, {
-        timeoutMs: 1500,
-        signal: ctx.signal,
-      });
-      category = (TOPIC_CATEGORIES as readonly string[]).includes(v.category ?? "")
-        ? (v.category as TopicCategory)
-        : "allowed";
-      confidence = typeof v.confidence === "number" ? v.confidence : 0.5;
+      const verdicts = await Promise.all(
+        requests.map((content) =>
+          safeguardClassify<{ category?: string; confidence?: number }>(TOPIC_POLICY, content, { timeoutMs: 1500, signal: ctx.signal }),
+        ),
+      );
+      // Most severe wins: any prohibited label beats "allowed", higher confidence first.
+      const parsed = verdicts.map((v) => ({
+        category: (TOPIC_CATEGORIES as readonly string[]).includes(v.category ?? "") ? (v.category as TopicCategory) : ("allowed" as TopicCategory),
+        confidence: typeof v.confidence === "number" ? v.confidence : 0.5,
+      }));
+      const worst = parsed.filter((p) => p.category !== "allowed").sort((a, b) => b.confidence - a.confidence)[0]
+        ?? parsed.sort((a, b) => a.confidence - b.confidence)[0];
+      category = worst.category;
+      confidence = worst.confidence;
     } catch (err) {
       if (!(err instanceof ClassifierError)) throw err;
       const texts = [ctx.text, ...(ctx.decoded ?? []), ...ctx.history.filter((m) => m.role === "user").map((m) => m.content)];

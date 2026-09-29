@@ -6,9 +6,10 @@ import { chaosFromRequest, withContext } from "@/lib/reliability/context";
 export const maxDuration = 30;
 
 const body = z.object({
-  text: z.string().trim().min(1).max(2000),
+  // A spoken turn is a few hundred characters; tight caps bound what guards must screen.
+  text: z.string().trim().min(1).max(1500),
   history: z
-    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(4000), sig: z.string().max(200).optional() }))
+    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(2000), sig: z.string().max(200).optional() }))
     .max(50)
     .default([]),
   timeZone: z.string().max(64).default("UTC"),
