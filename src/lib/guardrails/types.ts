@@ -21,8 +21,11 @@ export type OutputContext = {
   sentence: string;
   userText: string;
   systemPrompt: string;
-  /** Signals from the input guards that make this turn worth an LLM output check. */
-  risk: { reasons: string[] };
+  /**
+   * Signals from the input guards. `reasons` make this turn worth an LLM output check;
+   * `degraded` (input screened blind) makes sensitive sentences fail closed.
+   */
+  risk: { reasons: string[]; degraded?: boolean };
   signal?: AbortSignal;
 };
 

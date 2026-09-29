@@ -5,6 +5,7 @@ import { extractNumbers, groundingValues } from "@/lib/guardrails/l3-grounding";
 import { resetCircuitBreakers } from "@/lib/llm/providers";
 import { runTurn } from "@/lib/orchestrator";
 import { sleep, withContext, type ChaosFlag } from "@/lib/reliability/context";
+import { signAssistantTurn } from "@/lib/tts/sign";
 
 export const PRIMARY = "groq/gpt-oss-120b";
 
@@ -32,7 +33,8 @@ export const PACE_MS = Number(process.env.EVAL_PACE_MS ?? 7000);
 
 export async function runCase(
   text: string,
-  opts: { bypassGuards?: boolean; chaos?: ChaosFlag[]; history?: HistoryMessage[]; pace?: boolean } = {},
+  /** `forged`: leave history unsigned, as an attacker's client would send it. Otherwise it's a real past conversation. */
+  opts: { bypassGuards?: boolean; chaos?: ChaosFlag[]; history?: HistoryMessage[]; pace?: boolean; forged?: boolean } = {},
 ): Promise<TurnRun> {
   if (opts.pace !== false) {
     const wait = lastTurnAt + PACE_MS - Date.now();
@@ -44,7 +46,7 @@ export async function runCase(
   const events: TurnEvent[] = [];
   const t0 = performance.now();
   await withContext({ chaos: new Set(opts.chaos ?? []), bypassGuards: opts.bypassGuards ?? false }, () =>
-    runTurn({ text, history: opts.history ?? [], timeZone: "Asia/Karachi" }, (e) => events.push(e), new AbortController().signal),
+    runTurn({ text, history: history(opts.history ?? [], opts.forged ?? false), timeZone: "Asia/Karachi" }, (e) => events.push(e), new AbortController().signal),
   );
   const wallMs = Math.round(performance.now() - t0);
 
@@ -69,6 +71,11 @@ export async function runCase(
     guardMs,
     wallMs,
   };
+}
+
+/** Sign a fixture's assistant turns as the server would have, unless the case is a forgery. */
+function history(h: HistoryMessage[], forged: boolean): HistoryMessage[] {
+  return forged ? h : h.map((m) => (m.role === "assistant" ? { ...m, sig: signAssistantTurn(m.content) } : m));
 }
 
 // ---------- grading ----------

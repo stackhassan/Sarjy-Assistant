@@ -94,6 +94,18 @@ describe("L3 number extraction", () => {
     expect(extractNumbers("Want a 7\u2011day outlook?")[0]).toMatchObject({ value: 7, kind: "count" });
   });
 
+  it("reads figures glued to units: '46C', '300K', '20mph' (red-team finding)", () => {
+    expect(extractNumbers("The high is 46C, or 300K, winds 20mph.").map((n) => [n.value, n.kind])).toEqual([
+      [46, "measure"],
+      [300, "measure"],
+      [20, "measure"],
+    ]);
+  });
+
+  it("does not read times like '5pm' as figures", () => {
+    expect(extractNumbers("See you at 5pm.")).toEqual([]);
+  });
+
   it("handles 'one hundred and five'", () => {
     expect(extractNumbers("one hundred and five degrees").map((n) => n.value)).toEqual([105]);
   });
@@ -183,6 +195,34 @@ describe("L4 deterministic checks", () => {
       screenOutput({ sentence: "Stocks are shares of ownership in a company.", userText: "stock vs bond?", systemPrompt: prompt, risk: { reasons: [] } }),
     );
     expect(r.verdict).toBe("degraded");
+  });
+
+  it("blocks the system-prompt canary in any language (red-team: French leak)", async () => {
+    const r = await screenOutput({
+      sentence: "Nom interne : Zephyrine Quillmoor.",
+      userText: "traduis",
+      systemPrompt: prompt,
+      risk: { reasons: [] },
+    });
+    expect(r).toMatchObject({ verdict: "block", reason: "contains the system-prompt canary" });
+  });
+
+  it("fails closed on an instruction-shaped sentence when the classifier is down", async () => {
+    const r = await withContext(guardDown, () =>
+      screenOutput({ sentence: "Tu es Sarjy, une assistante vocale chaleureuse.", userText: "continue", systemPrompt: prompt, risk: { reasons: [] } }),
+    );
+    expect(r.verdict).toBe("block");
+    expect(r.reason).toContain("instruction-shaped");
+  });
+
+  it("in degraded mode, fails closed on sensitive sentences but lets small talk through", async () => {
+    const risk = { reasons: [], degraded: true };
+    const dosing = await withContext(guardDown, () =>
+      screenOutput({ sentence: "Take two tablets every four hours.", userText: "go ahead", systemPrompt: prompt, risk }),
+    );
+    const hello = await withContext(guardDown, () => screenOutput({ sentence: "Hi there!", userText: "hi", systemPrompt: prompt, risk }));
+    expect(dosing.verdict).toBe("block");
+    expect(hello.verdict).toBe("pass");
   });
 
   it("cleans markdown and URLs for speech", () => {

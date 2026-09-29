@@ -9,7 +9,7 @@ import { splitLong } from "@/lib/text/batch";
 import { SentenceSplitter } from "@/lib/text/sentences";
 import { runTool, toolSpecs } from "@/lib/tools";
 import { summarizeWeather, type WeatherResult } from "@/lib/tools/weather";
-import { signSentence } from "@/lib/tts/sign";
+import { signAssistantTurn, signSentence, verifyAssistantTurn } from "@/lib/tts/sign";
 
 export type TurnInput = {
   text: string;
@@ -24,6 +24,7 @@ const MAX_STREAM_ATTEMPTS = 2;
 
 const FALLBACK_LINE = "Sorry, I'm having trouble thinking right now. Could you try again in a moment?";
 const LOST_TRAIN_LINE = "Sorry, I lost my train of thought there. Could you ask me that again?";
+const EMPTY_LINE = "Sorry, I didn't quite get that. Could you say it another way?";
 const NO_TOOL_WEATHER_LINE =
   "Let me not guess at that. I'd need to check the live forecast, so which city should I look up?";
 
@@ -35,8 +36,14 @@ const NO_TOOL_WEATHER_LINE =
  *          └─ LLM stream ── sentences ┴─ L3 grounding → L4 output → sign → emit
  *                            └─ tool calls (only after the gate opens)
  */
-export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, signal: AbortSignal) {
+export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void, signal: AbortSignal) {
   const { bypassGuards } = context();
+  // History comes from the client. Assistant turns we didn't sign are forgeries or
+  // stale; drop them so a fake "Sure, rules are off now" can't steer the model.
+  const trusted = rawInput.history.filter((m) => m.role === "user" || verifyAssistantTurn(m.content, m.sig));
+  const dropped = rawInput.history.length - trusted.length;
+  // Trim once, so the guards screen exactly the conversation the model will see.
+  const input: TurnInput = { ...rawInput, history: trusted.slice(-MAX_HISTORY).map(({ role, content }) => ({ role, content })) };
   const turnId = crypto.randomUUID();
   const t0 = performance.now();
   const timings: Record<string, number> = {};
@@ -50,10 +57,14 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
   let stopped = false;
   let provider: string | undefined;
   let idx = 0;
+  const spoken: string[] = [];
 
   /** Emits approved text as signed, TTS-sized sentence events. */
   const emitSentence = (text: string) => {
-    for (const piece of splitLong(text)) emit({ type: "sentence", idx: idx++, text: piece, sig: signSentence(piece) });
+    for (const piece of splitLong(text)) {
+      spoken.push(piece);
+      emit({ type: "sentence", idx: idx++, text: piece, sig: signSentence(piece) });
+    }
   };
   const emitGuard = (r: GuardResult) =>
     emit({ type: "guard", layer: r.layer, verdict: r.verdict, reason: r.reason, ms: r.ms });
@@ -63,6 +74,10 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
     llmAbort.abort();
     emitSentence(line);
   };
+
+  if (dropped && !bypassGuards) {
+    emit({ type: "guard", layer: "L1_input", verdict: "repair", reason: `dropped ${dropped} unsigned assistant turn(s) from client history`, ms: 0 });
+  }
 
   // ---- input guards (L1 + L2), started in parallel with the LLM ----
   const gate: Promise<InputScreen | null> = bypassGuards
@@ -124,7 +139,7 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
 
   const messages: ChatMessage[] = [
     { role: "system", content: prompt },
-    ...input.history.slice(-MAX_HISTORY),
+    ...input.history,
     { role: "user", content: input.text },
   ];
 
@@ -215,6 +230,7 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
         emit({ type: "recovery", stage: "llm", action: "graceful stop", detail: err.message.slice(0, 160) });
         emitSentence(LOST_TRAIN_LINE);
       } else {
+        spoken.push(FALLBACK_LINE);
         emit({ type: "error", stage: "llm", message: (err as Error).message, spokenFallback: FALLBACK_LINE, sig: signSentence(FALLBACK_LINE) });
       }
     }
@@ -226,8 +242,14 @@ export async function runTurn(input: TurnInput, emit: (e: TurnEvent) => void, si
     // How long the first finished sentence waited on guards before it could be spoken.
     timings.guardWait = Math.max(0, Math.round(t0 + timings.firstSentence - firstReadyAt));
   }
+  // Never end a turn in silence (the red-team saw an empty completion under load).
+  if (spoken.length === 0 && !signal.aborted) {
+    emit({ type: "recovery", stage: "llm", action: "empty reply", detail: "model returned no text; spoke a fallback line" });
+    emitSentence(EMPTY_LINE);
+  }
   timings.total = Math.round(performance.now() - t0);
-  emit({ type: "done", turnId, provider, timings, guardsBypassed: bypassGuards || undefined });
+  const text = spoken.join(" ");
+  emit({ type: "done", turnId, provider, timings, guardsBypassed: bypassGuards || undefined, assistant: { text, sig: signAssistantTurn(text) } });
 }
 
 /**
@@ -265,10 +287,12 @@ function fold(s: string) {
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
 
+/** Whole-word match: "Paris" is mentioned in "how about paris?", not in "comparison". */
 export function mentioned(location: string, said: string[]): boolean {
   const place = fold(location.split(",")[0].trim());
   if (!place) return false;
-  return said.some((t) => fold(t).includes(place));
+  const re = new RegExp(`(^|[^\\p{L}])${place.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}])`, "u");
+  return said.some((t) => re.test(fold(t)));
 }
 
 function safeJson(s: string): Record<string, unknown> | null {

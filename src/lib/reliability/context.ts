@@ -44,14 +44,27 @@ export function chaos(flag: ChaosFlag): boolean {
   return context().chaos.has(flag);
 }
 
-/** Parses the `x-sarjy-chaos` header (comma-separated flags); unknown flags are ignored. */
+/**
+ * Faults that weaken a guard. Taking the classifiers offline is, in effect, a
+ * guard bypass (the red-team used it to get medical dosing), so over HTTP these
+ * are honoured only outside production or with an explicit server-side opt-in.
+ */
+export const GUARD_FAULTS: ReadonlySet<ChaosFlag> = new Set(["guard_down"]);
+
+export function guardFaultsAllowed(): boolean {
+  return process.env.NODE_ENV !== "production" || process.env.CHAOS_ALLOW_GUARD_FAULTS === "1";
+}
+
+/** Parses the `x-sarjy-chaos` header (comma-separated flags); unknown or disallowed flags are ignored. */
 export function chaosFromRequest(request: Request): Set<ChaosFlag> {
   const raw = request.headers.get("x-sarjy-chaos") ?? "";
+  const allowGuardFaults = guardFaultsAllowed();
   return new Set(
     raw
       .split(",")
       .map((s) => s.trim())
-      .filter((s): s is ChaosFlag => (CHAOS_FLAGS as readonly string[]).includes(s)),
+      .filter((s): s is ChaosFlag => (CHAOS_FLAGS as readonly string[]).includes(s))
+      .filter((f) => allowGuardFaults || !GUARD_FAULTS.has(f)),
   );
 }
 

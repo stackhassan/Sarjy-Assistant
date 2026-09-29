@@ -20,7 +20,7 @@ const TENS: Record<string, number> = {
 const HEDGES = /\b(about|around|roughly|approximately|nearly|almost|close to|near|up to|under|over|just (?:over|under)|mid|low|high|upper|lower)[- ]?$/i;
 
 /** Units that mark a figure as a measurement (vs. a count like "three days"). */
-const MEASURE_UNIT = /^\s*(?:[-\u2010-\u2013]|\s)?(degrees?|°|percent|%|per ?cent|km\/h|kph|kilomet(?:re|er)s?(?: per hour| an hour)?|mph|miles(?: per hour| an hour)?|mm|millimet(?:re|er)s?|celsius|fahrenheit|c\b|f\b)/i;
+const MEASURE_UNIT = /^\s*(?:[-\u2010-\u2013]|\s)?(degrees?|°|percent|%|per ?cent|km\/h|kph|kilomet(?:re|er)s?(?: per hour| an hour)?|mph|miles(?: per hour| an hour)?|mm|millimet(?:re|er)s?|celsius|fahrenheit|kelvin|kmh|c\b|f\b|k\b)/i;
 const COUNT_UNIT = /^\s*(?:[-\u2010-\u2013]|\s)?(days?|nights?|hours?|weeks?|minutes?|times?|things?|places?|cities|ways?)\b/i;
 
 export type ExtractedNumber = {
@@ -35,7 +35,10 @@ const SEP = "[\\s\\u2010\\u2011\\u2012\\u2013-]";
 const WORD = `(?:${[...Object.keys(TENS), ...Object.keys(UNITS), "hundred", "minus", "negative"].join("|")})`;
 const WORD_NUMBER = new RegExp(`\\b${WORD}(?:${SEP}+(?:and${SEP}+)?${WORD})*\\b`, "gi");
 // "5,500" is five thousand five hundred (thousands separator), "21.5" is a decimal.
-const DIGIT_NUMBER = /(?<![\w.,])[-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w])/g;
+// Units may be glued on ("46C", "300K", "20mph"): the red-team slipped "46C" past a
+// lookahead that required a non-word character after the digits. Times like "5pm" are skipped.
+const GLUED_UNIT = "(?:[CFK]|km\\/?h|kph|mph|mm|cm)\\b";
+const DIGIT_NUMBER = new RegExp(`(?<![\\w.,])[-−]?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?(?:(?![\\w])|(?=${GLUED_UNIT}))`, "gi");
 
 function parseWords(raw: string): number | null {
   const words = raw.toLowerCase().split(/[\s‐-–-]+/).filter((w) => w && w !== "and");

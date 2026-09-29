@@ -15,6 +15,8 @@ export type Turn = {
   user: string;
   assistant: string;
   events: TurnEvent[];
+  /** Server signature over `assistant`, from the turn's `done` event. */
+  assistantSig?: string;
   sttMs?: number;
   /** User stopped speaking (or hit send) → first audio from Sarjy. */
   ttfaMs?: number;
@@ -73,7 +75,7 @@ export function VoiceAssistant() {
     currentTurn.current = id;
     const history: HistoryMessage[] = turnsRef.current.flatMap((t) => [
       { role: "user", content: t.user },
-      ...(t.assistant ? [{ role: "assistant" as const, content: t.assistant }] : []),
+      ...(t.assistant ? [{ role: "assistant" as const, content: t.assistant, sig: t.assistantSig }] : []),
     ]);
     setTurns((ts) => [...ts, { id, user: text, assistant: "", events: clientEvents, sttMs }]);
     setStatus("thinking");
@@ -98,11 +100,14 @@ export function VoiceAssistant() {
           ...t,
           events: [...t.events, e],
           assistant:
-            e.type === "sentence"
-              ? `${t.assistant} ${e.text}`.trim()
-              : e.type === "error"
-                ? `${t.assistant} ${e.spokenFallback}`.trim()
-                : t.assistant,
+            e.type === "done"
+              ? e.assistant.text // authoritative, and what the signature covers
+              : e.type === "sentence"
+                ? `${t.assistant} ${e.text}`.trim()
+                : e.type === "error"
+                  ? `${t.assistant} ${e.spokenFallback}`.trim()
+                  : t.assistant,
+          assistantSig: e.type === "done" ? e.assistant.sig : t.assistantSig,
         }));
         if (e.type === "sentence") speaker.current?.enqueue(e);
         if (e.type === "error") speaker.current?.enqueue({ text: e.spokenFallback, sig: e.sig });

@@ -5,12 +5,19 @@ import type { GuardResult, InputContext } from "./types";
 export { checkGrounding } from "./l3-grounding";
 export { sanitizeForSpeech, screenOutput } from "./l4-output";
 
+/**
+ * Requests to repeat, translate or continue earlier text: the shape of every
+ * system-prompt extraction the red-team landed. These turns get L4's LLM check.
+ */
+const REPLAY_REQUEST =
+  /\b(translat(e|ion)|tradu\w*|übersetz\w*|continue|continuez|contin[uú]a|repeat|recite|verbatim|word for word|everything above|where you (left off|stopped)|carry on|keep going|summari[sz]e (your|the) (rules|instructions|guidelines))\b|^\s*go on\b/i;
+
 export type InputScreen = {
   results: GuardResult[];
   /** First blocking result, in layer order (L1 before L2). */
   blocked: GuardResult | null;
-  /** Reasons the output of this turn deserves an LLM check in L4. */
-  risk: { reasons: string[] };
+  /** Reasons the output of this turn deserves an LLM check in L4, and whether input was screened blind. */
+  risk: { reasons: string[]; degraded: boolean };
 };
 
 /**
@@ -25,10 +32,13 @@ export async function screenInput(ctx: InputContext): Promise<InputScreen> {
   const results: GuardResult[] = [l1, l2];
 
   const reasons: string[] = [];
+  // Blind input screening means the output must be screened harder (L4 fails closed on sensitive wording).
+  const degraded = results.some((r) => r.verdict === "degraded");
+  if (REPLAY_REQUEST.test(ctx.text)) reasons.push("asks to repeat/translate/continue");
   if (l1.score !== null && l1.score >= HEURISTIC_ASSIST_THRESHOLD) reasons.push(`prompt-guard ${l1.score.toFixed(2)}`);
   if (l2.category && l2.category !== "allowed" && (l2.confidence ?? 0) < MIN_BLOCK_CONFIDENCE) {
     reasons.push(`possible ${l2.category}`);
   }
 
-  return { results, blocked: results.find((r) => r.verdict === "block") ?? null, risk: { reasons } };
+  return { results, blocked: results.find((r) => r.verdict === "block") ?? null, risk: { reasons, degraded } };
 }

@@ -20,7 +20,7 @@ export const MIN_BLOCK_CONFIDENCE = 0.6;
 
 /** Written policy for gpt-oss-safeguard. Kept short: it is sent on every turn (8k TPM budget). */
 export const TOPIC_POLICY = `# Sarjy topic policy
-Classify the latest USER MESSAGE for a friendly daily-life voice assistant. Use the previous assistant message only as context for follow-ups.
+Classify what the user is asking for, for a friendly daily-life voice assistant. The latest USER MESSAGE may continue an earlier request ("ok, go ahead", "continue", "so which one?"): classify the request it continues, using EARLIER USER MESSAGES and the previous assistant message as context.
 
 ## Categories (return exactly one)
 - allowed: small talk, weather, personal facts/preferences, general knowledge, light planning, coding/tech questions, anything not below.
@@ -62,7 +62,8 @@ export const TOPIC_REPLIES: Record<Exclude<TopicCategory, "allowed">, string> = 
  * over-refusing while blind. Self-harm is prioritised.
  */
 const FALLBACK_KEYWORDS: [Exclude<TopicCategory, "allowed">, RegExp][] = [
-  ["self_harm", /\b(kill myself|end my life|suicid(e|al)|want to die|don'?t want to (be alive|live)|hurt myself|self[- ]harm)\b/i],
+  // English, Spanish, French, Roman Urdu: the degraded fallback missed a Roman-Urdu message (red-team).
+  ["self_harm", /\b(kill myself|end my life|suicid(e|al|io|arme)|want to die|don'?t want to (be alive|live)|hurt myself|self[- ]harm|quiero morir(me)?|matarme|me suicider|envie de mourir|khud ?kushi|marna chahta|mar jana chahta|zindagi khatam)\b/i],
   ["system_prompt", /\bsystem prompt\b|\byour (hidden |secret )?(instructions|rules)\b/i],
   ["harm", /\b(make|build) (a )?(bomb|explosive|gun|weapon)\b|\bhow (do i|to) (poison|stab|shoot) (a |my |some)/i],
   ["medical", /\b(what|how much) (dose|dosage)\b|\bhow many (mg|milligrams|pills)\b/i],
@@ -78,8 +79,15 @@ export async function screenTopic(ctx: InputContext): Promise<L2Result> {
 
   const result = await timed("L2_topic", async () => {
     const lastAssistant = [...ctx.history].reverse().find((m) => m.role === "assistant")?.content;
+    // Earlier user turns: a sensitive ask placed there, then "ok go ahead" in the latest turn,
+    // slipped past a latest-message-only check (red-team finding).
+    const earlier = ctx.history
+      .filter((m) => m.role === "user")
+      .slice(-3)
+      .map((m) => `- ${m.content.slice(0, 300)}`)
+      .join("\n");
     const decoded = ctx.decoded?.length ? `\nDECODED FROM THE USER MESSAGE: ${ctx.decoded.join(" | ").slice(0, 600)}` : "";
-    const content = `${lastAssistant ? `PREVIOUS ASSISTANT MESSAGE: ${lastAssistant.slice(0, 400)}\n` : ""}USER MESSAGE: ${ctx.text}${decoded}`;
+    const content = `${earlier ? `EARLIER USER MESSAGES:\n${earlier}\n` : ""}${lastAssistant ? `PREVIOUS ASSISTANT MESSAGE: ${lastAssistant.slice(0, 400)}\n` : ""}USER MESSAGE: ${ctx.text}${decoded}`;
 
     try {
       const v = await safeguardClassify<{ category?: string; confidence?: number }>(TOPIC_POLICY, content, {
@@ -92,7 +100,7 @@ export async function screenTopic(ctx: InputContext): Promise<L2Result> {
       confidence = typeof v.confidence === "number" ? v.confidence : 0.5;
     } catch (err) {
       if (!(err instanceof ClassifierError)) throw err;
-      const texts = [ctx.text, ...(ctx.decoded ?? [])];
+      const texts = [ctx.text, ...(ctx.decoded ?? []), ...ctx.history.filter((m) => m.role === "user").map((m) => m.content)];
       const hit = FALLBACK_KEYWORDS.find(([, re]) => texts.some((t) => re.test(t)));
       if (hit) {
         category = hit[0];

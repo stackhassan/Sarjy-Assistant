@@ -18,7 +18,16 @@ export type TurnEvent =
   | { type: "sentence"; idx: number; text: string; sig: string }
   /** A failure that was handled: failover, retry, fallback source, degraded guard, etc. */
   | { type: "recovery"; stage: "llm" | "tool" | "guard" | "stt" | "tts"; action: string; detail: string }
-  | { type: "done"; turnId: string; provider?: string; timings: Record<string, number>; guardsBypassed?: boolean }
+  | {
+      type: "done";
+      turnId: string;
+      provider?: string;
+      timings: Record<string, number>;
+      guardsBypassed?: boolean;
+      /** Everything Sarjy said this turn, signed; the client sends it back as history. */
+      assistant: { text: string; sig: string };
+    }
   | { type: "error"; stage: string; message: string; spokenFallback: string; sig: string };
 
-export type HistoryMessage = { role: "user" | "assistant"; content: string };
+/** Assistant turns must carry the server's `sig` from `done.assistant`, or they are dropped. */
+export type HistoryMessage = { role: "user" | "assistant"; content: string; sig?: string };

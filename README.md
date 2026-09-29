@@ -7,7 +7,7 @@ A voice assistant with layered, measured guardrails, built for the Sarj take-hom
 | Doc | What's in it |
 |---|---|
 | [docs/PRD.md](docs/PRD.md) | Product and technical design |
-| [docs/guardrails.md](docs/guardrails.md) | The guard layers, results, trade-offs, and what testing caught |
+| [docs/guardrails.md](docs/guardrails.md) | The guard layers, results, the red-team's 9 breaks and their fixes, trade-offs |
 | [docs/reliability.md](docs/reliability.md) | How every failure (LLM, weather, guards, STT, TTS) is handled |
 | [docs/evals/](docs/evals/) | Generated reports: scorecard, latency, reliability |
 | [docs/decisions/](docs/decisions/) | Architecture decision records |
@@ -31,7 +31,7 @@ Orpheus TTS needs a one-time terms acceptance in the Groq console. Until then, S
 ## Try to break it
 
 - Type a jailbreak and watch the **Guardrail Inspector**: which layer fired, why, and in how many ms.
-- Inject failures from the URL: `/?chaos=llm_primary_down,weather_slow`. Flags: `llm_primary_down`, `llm_all_down`, `llm_slow`, `llm_midstream_drop`, `weather_down`, `weather_all_down`, `weather_slow`, `guard_down`, `stt_down`, `tts_down`. They affect only your own requests; none can disable guardrails.
+- Inject failures from the URL: `/?chaos=llm_primary_down,weather_slow`. Flags: `llm_primary_down`, `llm_all_down`, `llm_slow`, `llm_midstream_drop`, `weather_down`, `weather_all_down`, `weather_slow`, `guard_down`, `stt_down`, `tts_down`. They affect only your own requests. `guard_down` is ignored in production (it would weaken the guardrails), and no flag can disable them.
 
 ## Scripts
 

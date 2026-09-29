@@ -5,8 +5,12 @@ import { timed, type GuardResult, type InputContext } from "./types";
 export const BLOCK_THRESHOLD = 0.9;
 /** Lower bar when a heuristic also matched (two independent signals agree). */
 export const HEURISTIC_ASSIST_THRESHOLD = 0.3;
-/** How many previous user turns to include when scoring multi-turn ("crescendo") attacks. */
-const WINDOW_TURNS = 3;
+/**
+ * Previous user turns are scored together with the latest one, catching multi-turn
+ * ("crescendo") attacks. The red-team placed a payload just outside a 3-turn window,
+ * so this covers every user turn the model will see (history is trimmed upstream).
+ */
+const WINDOW_TURNS = 12;
 
 // ---------- normalization & de-obfuscation ----------
 
