@@ -49,6 +49,13 @@ export class MidStreamError extends Error {
 
 /** Max gap between stream chunks before we treat the stream as dead. */
 const IDLE_TIMEOUT_MS = 5000;
+/**
+ * Max time from response headers to the first *usable* delta (text or tool call).
+ * gpt-oss streams reasoning chunks first, which keep the idle timer alive, so a
+ * model thinking slowly (we measured 9.4 s) never tripped it. Nothing has been
+ * spoken at this point, so failing over is invisible to the user.
+ */
+const FIRST_CONTENT_TIMEOUT_MS = 5000;
 
 /**
  * Circuit breaker: after a provider fails, skip it for a cool-down.
@@ -171,13 +178,18 @@ async function* parseStream(res: Response, provider: string, dropAfterFirst: boo
   const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
   let buf = "";
   let emitted = 0;
+  const openedAt = Date.now();
   try {
     while (true) {
+      if (emitted === 0 && Date.now() - openedAt > FIRST_CONTENT_TIMEOUT_MS) {
+        throw new ProviderError(provider, "stalled", `${provider} produced no content within ${FIRST_CONTENT_TIMEOUT_MS} ms`);
+      }
       let timer: ReturnType<typeof setTimeout> | undefined;
+      const limit = emitted === 0 ? Math.min(IDLE_TIMEOUT_MS, FIRST_CONTENT_TIMEOUT_MS - (Date.now() - openedAt)) : IDLE_TIMEOUT_MS;
       const idle = new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new ProviderError(provider, "stalled", `${provider} stream stalled for ${IDLE_TIMEOUT_MS} ms`)),
-          IDLE_TIMEOUT_MS,
+          () => reject(new ProviderError(provider, "stalled", `${provider} stream stalled (${emitted === 0 ? "no content" : "idle"} for ${limit} ms)`)),
+          Math.max(0, limit),
         );
       });
       const { value, done } = await Promise.race([reader.read(), idle]).finally(() => clearTimeout(timer));

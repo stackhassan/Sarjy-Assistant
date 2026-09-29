@@ -9,7 +9,12 @@ process.env.GROQ_API_KEY ??= "test";
 
 // ---------- a scripted fake Groq + weather ----------
 
-type Reply = { text: string } | { tool: { name: string; args: Record<string, unknown> } } | { status: number } | { dropAfter: string };
+type Reply =
+  | { text: string }
+  | { tool: { name: string; args: Record<string, unknown> } }
+  | { status: number }
+  | { dropAfter: string }
+  | { reasoningOnly: true };
 
 type Script = {
   promptGuard?: number;
@@ -59,6 +64,17 @@ function install(script: Script) {
         { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: r.tool.name, arguments: JSON.stringify(r.tool.args) } }] } }] },
         { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
       ]);
+    }
+    if ("reasoningOnly" in r) {
+      // A model "thinking" forever: reasoning deltas keep arriving, no content ever does.
+      const enc = new TextEncoder();
+      const stream = new ReadableStream({
+        async pull(c) {
+          await new Promise((res) => setTimeout(res, 400));
+          c.enqueue(enc.encode(`data: ${JSON.stringify({ choices: [{ delta: { reasoning: "hmm " } }] })}\n\n`));
+        },
+      });
+      return new Response(stream, { status: 200 });
     }
     if ("dropAfter" in r) {
       // Deliver one chunk, then the connection dies on the next read.
@@ -192,6 +208,14 @@ describe("reliability end to end", () => {
     expect(chatModels).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
     expect(of("recovery").some((r) => r.action === "retry")).toBe(true);
   });
+
+  it("fails over when the primary only 'thinks' and never produces content (eval-found)", async () => {
+    const { chatModels } = install({ replies: [{ reasoningOnly: true }, { text: "Hi there!" }] });
+    const { spoken, of } = await turn("hi");
+    expect(spoken).toBe("Hi there!");
+    expect(chatModels).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+    expect(of("recovery")[0].detail).toMatch(/no content/);
+  }, 15_000);
 
   it("stops gracefully if a stream dies after speaking", async () => {
     install({ replies: [{ dropAfter: "Here is the first thing. And then" }] });

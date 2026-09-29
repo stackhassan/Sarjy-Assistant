@@ -20,8 +20,8 @@ const TENS: Record<string, number> = {
 const HEDGES = /\b(about|around|roughly|approximately|nearly|almost|close to|near|up to|under|over|just (?:over|under)|mid|low|high|upper|lower)[- ]?$/i;
 
 /** Units that mark a figure as a measurement (vs. a count like "three days"). */
-const MEASURE_UNIT = /^\s*(?:-|\s)?(degrees?|°|percent|%|per ?cent|km\/h|kph|kilomet(?:re|er)s?(?: per hour| an hour)?|mph|miles(?: per hour| an hour)?|mm|millimet(?:re|er)s?|celsius|fahrenheit|c\b|f\b)/i;
-const COUNT_UNIT = /^\s*(?:-|\s)?(days?|nights?|hours?|weeks?|minutes?|times?|things?|places?|cities|ways?)\b/i;
+const MEASURE_UNIT = /^\s*(?:[-\u2010-\u2013]|\s)?(degrees?|°|percent|%|per ?cent|km\/h|kph|kilomet(?:re|er)s?(?: per hour| an hour)?|mph|miles(?: per hour| an hour)?|mm|millimet(?:re|er)s?|celsius|fahrenheit|c\b|f\b)/i;
+const COUNT_UNIT = /^\s*(?:[-\u2010-\u2013]|\s)?(days?|nights?|hours?|weeks?|minutes?|times?|things?|places?|cities|ways?)\b/i;
 
 export type ExtractedNumber = {
   value: number;

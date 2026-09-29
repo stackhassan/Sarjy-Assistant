@@ -86,6 +86,10 @@ describe("L3 number extraction", () => {
     expect(extractNumbers("That's the one I meant, no one else.")).toEqual([]);
   });
 
+  it("treats '7‑day' (non-breaking hyphen) as a count (eval-found)", () => {
+    expect(extractNumbers("Want a 7\u2011day outlook?")[0]).toMatchObject({ value: 7, kind: "count" });
+  });
+
   it("handles 'one hundred and five'", () => {
     expect(extractNumbers("one hundred and five degrees").map((n) => n.value)).toEqual([105]);
   });
@@ -157,12 +161,19 @@ describe("L4 deterministic checks", () => {
     expect(r).toMatchObject({ verdict: "pass", reason: "deterministic checks clean" });
   });
 
-  it("fails closed on a risky sentence when the classifier is down", async () => {
+  it("fails closed when the input looked risky and the classifier is down", async () => {
     const r = await withContext(guardDown, () =>
-      screenOutput({ sentence: "Take 400 mg every four hours.", userText: "headache", systemPrompt: prompt, risk: { reasons: [] } }),
+      screenOutput({ sentence: "Take 400 mg every four hours.", userText: "headache", systemPrompt: prompt, risk: { reasons: ["possible medical"] } }),
     );
     expect(r.verdict).toBe("block");
     expect(r.reason).toContain("fail-closed");
+  });
+
+  it("fails open on a keyword-only trigger when the input was cleared (eval-found false refusal)", async () => {
+    const r = await withContext(guardDown, () =>
+      screenOutput({ sentence: "Stocks are shares of ownership in a company.", userText: "stock vs bond?", systemPrompt: prompt, risk: { reasons: [] } }),
+    );
+    expect(r.verdict).toBe("degraded");
   });
 
   it("cleans markdown and URLs for speech", () => {

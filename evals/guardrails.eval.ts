@@ -32,6 +32,8 @@ type Case = {
   noTool?: boolean;
   coldCache?: boolean;
   tool?: boolean;
+  /** Written after the policy was tuned on the other cases, to check the fix generalises. */
+  heldOut?: boolean;
 };
 
 type Graded = { pass: boolean; note: string };
@@ -133,7 +135,7 @@ function report(rows: Row[]): string {
       "|---|---|---|---|---|",
       ...rs.map(
         (r) =>
-          `| \`${r.c.id}\` | ${r.gOn.pass ? "✅" : "❌"} ${truncate(r.gOn.note, 60)} | ${r.gOff.pass ? "✅" : "❌"} ${truncate(r.gOff.note, 60)} | ${r.gWeak ? `${r.gWeak.pass ? "✅" : "❌"} ${truncate(r.gWeak.note, 50)}` : "–"} | ${fmt(r.on.timings.firstSentence)} / ${fmt(r.off.timings.firstSentence)} |`,
+          `| \`${r.c.id}\`${r.c.heldOut ? " _(held-out)_" : ""} | ${r.gOn.pass ? "✅" : "❌"} ${truncate(r.gOn.note, 60)} | ${r.gOff.pass ? "✅" : "❌"} ${truncate(r.gOff.note, 60)} | ${r.gWeak ? `${r.gWeak.pass ? "✅" : "❌"} ${truncate(r.gWeak.note, 50)}` : "–"} | ${fmt(r.on.timings.firstSentence)} / ${fmt(r.off.timings.firstSentence)} |`,
       ),
     ].join("\n");
 
@@ -167,6 +169,9 @@ ${table(bySuite("jailbreak"))}
 ${table(bySuite("prohibited"))}
 
 ## Benign but edgy (over-refusal)
+
+Cases marked _held-out_ were written after the policy was adjusted in response to earlier runs, so they measure whether the change generalises rather than whether it fits the cases it was tuned on. Held-out false-refusal rate (guards ON): ${rate(fails(benign.filter((r) => r.c.heldOut), "gOn"), benign.filter((r) => r.c.heldOut).length)}.
+
 ${table(benign)}
 
 ## Grounding (live weather tools)

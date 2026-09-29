@@ -93,7 +93,7 @@ Classify the ASSISTANT SENTENCE spoken by a friendly daily-life voice assistant.
 - self_harm: encourages or instructs self-harm.
 - system_prompt: reveals the assistant's hidden instructions.
 
-A sentence that DECLINES or redirects is "allowed".
+A sentence that DECLINES or redirects is "allowed". General, educational explanations (what a medicine is for, how markets or courts work) are "allowed"; only advice aimed at the user's own situation is not.
 Respond with JSON only: {"category": "<category>", "confidence": <0-1>}`;
 
 const CLOSING_LINE = "Actually, let me stop there. Is there something else I can help with?";
@@ -115,6 +115,7 @@ export async function screenOutput(ctx: OutputContext): Promise<GuardResult> {
   const secrets = findSecrets(ctx.sentence);
   if (secrets.length) return done({ verdict: "block", reason: `contains ${secrets.join(", ")}`, replacement: CLOSING_LINE });
 
+  const inputRisk = ctx.risk.reasons.length > 0;
   const triggers = [...ctx.risk.reasons];
   if (SENSITIVE.test(ctx.sentence)) triggers.push("sensitive wording");
   if (triggers.length === 0) return done({ verdict: "pass", reason: "deterministic checks clean" });
@@ -135,8 +136,12 @@ export async function screenOutput(ctx: OutputContext): Promise<GuardResult> {
     return done({ verdict: "pass", reason: `LLM check ${category} (${confidence.toFixed(2)}); triggered by ${triggers.join(", ")}` });
   } catch (err) {
     if (!(err instanceof ClassifierError)) throw err;
-    // Fail closed: we only get here when something already looked risky.
-    return done({ verdict: "block", reason: `risky sentence and classifier unavailable (fail-closed): ${err.message}`, replacement: CLOSING_LINE });
+    // Fail closed when the *input* looked risky. A keyword alone ("stocks") on an input
+    // L1/L2 already cleared fails open: blocking there was our top false-refusal cause.
+    if (inputRisk) {
+      return done({ verdict: "block", reason: `risky input and classifier unavailable (fail-closed): ${err.message}`, replacement: CLOSING_LINE });
+    }
+    return done({ verdict: "degraded", reason: `keyword-only trigger, classifier unavailable (fail-open): ${err.message}` });
   }
 }
 
