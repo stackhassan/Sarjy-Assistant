@@ -14,10 +14,16 @@ const schema = z.object({
 
 export type Env = z.infer<typeof schema>;
 
-let cached: Env | undefined;
+let cached: { env: Env; key: string | undefined } | undefined;
 
-/** Server-side env, validated on first use so a missing key fails loudly. */
+/**
+ * Server-side env, validated on first use so a missing key fails loudly.
+ * Re-validated when the API key changes, so a rotated key in .env.local takes
+ * effect on Next's env reload without restarting the server.
+ */
 export function env(): Env {
-  if (!cached) cached = schema.parse(process.env);
-  return cached;
+  if (!cached || cached.key !== process.env.GROQ_API_KEY) {
+    cached = { env: schema.parse(process.env), key: process.env.GROQ_API_KEY };
+  }
+  return cached.env;
 }
