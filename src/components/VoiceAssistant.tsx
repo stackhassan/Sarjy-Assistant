@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Recorder } from "@/lib/client/recorder";
+import { chaosFlags, chaosHeaders } from "@/lib/client/chaos";
 import { Speaker, type VoiceSource } from "@/lib/client/speaker";
 import { TTS_VOICE } from "@/lib/llm/models";
 import { readEvents } from "@/lib/client/sse";
@@ -19,6 +20,8 @@ export type Turn = {
   ttfaMs?: number;
 };
 
+const noopSubscribe = () => () => {};
+
 export function VoiceAssistant() {
   const [status, setStatus] = useState<AssistantStatus>("idle");
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -30,6 +33,10 @@ export function VoiceAssistant() {
   const speaker = useRef<Speaker | null>(null);
   const inflight = useRef<AbortController | null>(null);
   const turnsRef = useRef<Turn[]>([]);
+  const currentTurn = useRef<string | null>(null);
+  // Read from the URL on the client only; the server render has no flags.
+  const chaosKey = useSyncExternalStore(noopSubscribe, () => chaosFlags().join(","), () => "");
+  const chaos = chaosKey ? chaosKey.split(",") : [];
 
   useEffect(() => {
     turnsRef.current = turns;
@@ -40,7 +47,14 @@ export function VoiceAssistant() {
     speaker.current = new Speaker({
       onStart: () => setStatus("speaking"),
       onIdle: () => setStatus((s) => (s === "speaking" ? "idle" : s)),
-      onVoice: (source, reason) => setVoice({ source, reason }),
+      onVoice: (source, reason) => {
+        setVoice({ source, reason });
+        const id = currentTurn.current;
+        if (source === "browser" && reason && id) {
+          const e: TurnEvent = { type: "recovery", stage: "tts", action: "browser voice", detail: reason };
+          setTurns((ts) => ts.map((t) => (t.id === id ? { ...t, events: [...t.events, e] } : t)));
+        }
+      },
     });
     return () => speaker.current?.cancel();
   }, []);
@@ -54,13 +68,14 @@ export function VoiceAssistant() {
     speaker.current?.cancel();
   };
 
-  const runTurn = useCallback(async (text: string, startedAt: number, sttMs?: number) => {
+  const runTurn = useCallback(async (text: string, startedAt: number, sttMs?: number, clientEvents: TurnEvent[] = []) => {
     const id = crypto.randomUUID();
+    currentTurn.current = id;
     const history: HistoryMessage[] = turnsRef.current.flatMap((t) => [
       { role: "user", content: t.user },
       ...(t.assistant ? [{ role: "assistant" as const, content: t.assistant }] : []),
     ]);
-    setTurns((ts) => [...ts, { id, user: text, assistant: "", events: [], sttMs }]);
+    setTurns((ts) => [...ts, { id, user: text, assistant: "", events: clientEvents, sttMs }]);
     setStatus("thinking");
 
     speaker.current?.onNextAudioStart(() =>
@@ -72,7 +87,7 @@ export function VoiceAssistant() {
     try {
       const res = await fetch("/api/turn", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...chaosHeaders() },
         body: JSON.stringify({ text, history, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
         signal: ac.signal,
       });
@@ -110,19 +125,32 @@ export function VoiceAssistant() {
       setStatus("transcribing");
       try {
         const clip = await rec.stop();
-        const form = new FormData();
-        form.append("audio", clip);
-        const res = await fetch("/api/stt", { method: "POST", body: form });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Transcription failed");
-        if (!data.text) {
-          setNotice("I didn't catch that — try again?");
+        if (clip.size < 2000) {
+          setNotice("That was a bit short. Tap, speak, then tap again to send.");
           setStatus("idle");
           return;
         }
-        await runTurn(data.text, stoppedAt, data.ms);
-      } catch (err) {
-        setNotice((err as Error).message);
+        const form = new FormData();
+        form.append("audio", clip);
+        const res = await fetch("/api/stt", { method: "POST", body: form, headers: chaosHeaders() });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Transcription failed");
+        if (!data.text) {
+          setNotice("I didn't catch that. Try again?");
+          setStatus("idle");
+          return;
+        }
+        const sttEvents: TurnEvent[] = (data.failovers ?? []).map((detail: string) => ({
+          type: "recovery",
+          stage: "stt",
+          action: "failover",
+          detail: `${detail} → ${data.model}`,
+        }));
+        await runTurn(data.text, stoppedAt, data.ms, sttEvents);
+      } catch {
+        // Both STT models failed: say so out loud, and offer the text box.
+        setNotice("I couldn't make out that audio. You can try again or type below.");
+        speaker.current?.enqueue({ text: "Sorry, I couldn't hear that properly. Could you try again, or type it instead?" });
         setStatus("idle");
       }
       return;
@@ -155,6 +183,11 @@ export function VoiceAssistant() {
         <header className="mb-8 text-center">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-100">Sarjy</h1>
           <p className="text-sm text-slate-400">A voice assistant with guardrails you can watch.</p>
+          {chaos.length > 0 && (
+            <p className="mt-2 rounded-full bg-amber-500/10 px-3 py-1 text-xs text-amber-300 ring-1 ring-amber-500/30">
+              Fault injection on: {chaos.join(", ")}
+            </p>
+          )}
           <p className="mt-1 text-xs text-slate-500" title={voice.reason}>
             Voice: {voice.source === "orpheus" ? `Orpheus · ${TTS_VOICE[0].toUpperCase()}${TTS_VOICE.slice(1)}` : `browser fallback${voice.reason ? ` (${voice.reason})` : ""}`}
           </p>

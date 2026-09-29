@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { chaos, sleep } from "@/lib/reliability/context";
 import { MODELS } from "./models";
 import type { ChatDelta, ChatMessage, ToolChoice, ToolSpec } from "./types";
 
@@ -20,17 +21,34 @@ export type StreamChatOptions = {
   toolChoice?: ToolChoice;
   temperature?: number;
   signal?: AbortSignal;
+  /** Providers to skip for this call (e.g. one that just dropped mid-stream). */
+  exclude?: string[];
+  /** Called when a provider fails and the next one is tried. */
+  onFailover?: (failed: string, error: Error) => void;
 };
 
 export class ProviderError extends Error {
   constructor(
     readonly provider: string,
-    readonly status: number | "timeout" | "network",
+    readonly status: number | "timeout" | "network" | "stalled" | "dropped",
     message: string,
   ) {
     super(message);
   }
 }
+
+/** The stream failed after output had started, so it can't be transparently replaced here. */
+export class MidStreamError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly cause: unknown,
+  ) {
+    super(`${provider} failed mid-stream: ${(cause as Error).message}`);
+  }
+}
+
+/** Max gap between stream chunks before we treat the stream as dead. */
+const IDLE_TIMEOUT_MS = 5000;
 
 /**
  * Circuit breaker: after a provider fails, skip it for a cool-down.
@@ -39,6 +57,11 @@ export class ProviderError extends Error {
  */
 const COOLDOWN_MS = 30_000;
 const openUntil = new Map<string, number>();
+
+/** For tests and evals: forget circuit-breaker state. */
+export function resetCircuitBreakers() {
+  openUntil.clear();
+}
 
 function providers(): Provider[] {
   const e = env();
@@ -64,38 +87,56 @@ function providers(): Provider[] {
 }
 
 /**
- * Streams a chat completion, failing over to the next provider if one errors
- * or doesn't respond in time. Failover only happens before the first byte —
- * once a provider is streaming we never splice two providers' output together.
+ * Streams a chat completion, failing over to the next provider if one errors,
+ * times out, or dies before producing any output. Once a provider has produced
+ * output we never splice another provider's text onto it here; the caller gets
+ * a MidStreamError and decides (the orchestrator retries if nothing was spoken).
  */
-export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<ChatDelta & { provider?: string }> {
-  const candidates = providers().filter((p) => (openUntil.get(p.name) ?? 0) < Date.now());
-  if (candidates.length === 0) candidates.push(...providers()); // all tripped: try anyway
-  let lastError: unknown;
+export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<ChatDelta & { provider: string }> {
+  const ordered = providers();
+  const primary = ordered[0].name;
+  const all = ordered.filter((p) => !opts.exclude?.includes(p.name));
+  let candidates = all.filter((p) => (openUntil.get(p.name) ?? 0) < Date.now());
+  if (candidates.length === 0) candidates = all; // all tripped: try anyway rather than fail
+  let lastError: unknown = new Error("No LLM provider available");
 
   for (const p of candidates) {
-    let res: Response;
+    const isPrimary = p.name === primary;
+    let yielded = false;
     try {
-      res = await openStream(p, opts);
+      const res = await openStream(p, opts, {
+        fail: chaos("llm_all_down") || (isPrimary && chaos("llm_primary_down")),
+        stall: isPrimary && chaos("llm_slow"),
+      });
+      for await (const delta of parseStream(res, p.name, isPrimary && chaos("llm_midstream_drop"))) {
+        yielded = true;
+        yield { ...delta, provider: p.name };
+      }
+      openUntil.delete(p.name);
+      return;
     } catch (err) {
-      lastError = err;
       if (opts.signal?.aborted) throw err;
       openUntil.set(p.name, Date.now() + COOLDOWN_MS);
-      continue;
+      if (yielded) throw new MidStreamError(p.name, err);
+      lastError = err;
+      opts.onFailover?.(p.name, err as Error);
     }
-    openUntil.delete(p.name);
-    for await (const delta of parseStream(res)) yield { ...delta, provider: p.name };
-    return;
   }
-  throw lastError ?? new Error("No LLM provider available");
+  throw lastError;
 }
 
-async function openStream(p: Provider, opts: StreamChatOptions): Promise<Response> {
+async function openStream(
+  p: Provider,
+  opts: StreamChatOptions,
+  inject: { fail: boolean; stall: boolean },
+): Promise<Response> {
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), p.timeoutMs);
   const signal = opts.signal ? AbortSignal.any([opts.signal, timeout.signal]) : timeout.signal;
 
   try {
+    if (inject.fail) throw new ProviderError(p.name, 503, `${p.name} 503: simulated outage (chaos)`);
+    if (inject.stall) await sleep(p.timeoutMs + 1000, signal);
     const res = await fetch(`${p.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${p.apiKey}` },
@@ -111,40 +152,61 @@ async function openStream(p: Provider, opts: StreamChatOptions): Promise<Respons
       signal,
     });
     if (!res.ok || !res.body) {
-      throw new ProviderError(p.name, res.status, `${p.name} ${res.status}: ${await res.text().catch(() => "")}`);
+      const body = await res.text().catch(() => "");
+      throw new ProviderError(p.name, res.status, `${p.name} ${res.status}: ${body.slice(0, 200)}`);
     }
     return res;
   } catch (err) {
     if (err instanceof ProviderError) throw err;
-    if (timeout.signal.aborted) throw new ProviderError(p.name, "timeout", `${p.name} timed out`);
+    if (timeout.signal.aborted) throw new ProviderError(p.name, "timeout", `${p.name} timed out after ${p.timeoutMs} ms`);
+    if (opts.signal?.aborted) throw err;
     throw new ProviderError(p.name, "network", `${p.name}: ${(err as Error).message}`);
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Parses an OpenAI-style SSE body into text / tool-call / finish deltas. */
-async function* parseStream(res: Response): AsyncGenerator<ChatDelta> {
+/** Parses an OpenAI-style SSE body into text / tool-call / finish deltas, with stall detection. */
+async function* parseStream(res: Response, provider: string, dropAfterFirst: boolean): AsyncGenerator<ChatDelta> {
   const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
   let buf = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += value;
-    const lines = buf.split("\n");
-    buf = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (data === "[DONE]") return;
-      const choice = JSON.parse(data).choices?.[0];
-      if (!choice) continue;
-      const d = choice.delta ?? {};
-      if (d.content) yield { type: "text", text: d.content };
-      for (const tc of d.tool_calls ?? []) {
-        yield { type: "tool_call", index: tc.index ?? 0, id: tc.id, name: tc.function?.name, args: tc.function?.arguments };
+  let emitted = 0;
+  try {
+    while (true) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new ProviderError(provider, "stalled", `${provider} stream stalled for ${IDLE_TIMEOUT_MS} ms`)),
+          IDLE_TIMEOUT_MS,
+        );
+      });
+      const { value, done } = await Promise.race([reader.read(), idle]).finally(() => clearTimeout(timer));
+      if (done) return;
+      buf += value;
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") return;
+        const choice = JSON.parse(data).choices?.[0];
+        if (!choice) continue;
+        const d = choice.delta ?? {};
+        if (d.content) {
+          if (dropAfterFirst && emitted > 0) {
+            throw new ProviderError(provider, "dropped", `${provider} connection dropped (chaos)`);
+          }
+          emitted++;
+          yield { type: "text", text: d.content };
+        }
+        for (const tc of d.tool_calls ?? []) {
+          emitted++;
+          yield { type: "tool_call", index: tc.index ?? 0, id: tc.id, name: tc.function?.name, args: tc.function?.arguments };
+        }
+        if (choice.finish_reason) yield { type: "finish", reason: choice.finish_reason };
       }
-      if (choice.finish_reason) yield { type: "finish", reason: choice.finish_reason };
     }
+  } finally {
+    reader.cancel().catch(() => {});
   }
 }

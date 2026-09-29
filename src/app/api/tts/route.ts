@@ -4,6 +4,7 @@ import { MODELS, TTS_VOICE } from "@/lib/llm/models";
 import { TTS_MAX_CHARS } from "@/lib/text/batch";
 import { retryAfterSeconds } from "@/lib/tts/retryAfter";
 import { verifySentence } from "@/lib/tts/sign";
+import { chaosFromRequest } from "@/lib/reliability/context";
 
 export const maxDuration = 15;
 
@@ -27,6 +28,10 @@ export async function POST(request: Request) {
   }
   const input = sentences.map((s) => s.text).join(" ");
   if (input.length > TTS_MAX_CHARS) return Response.json({ error: "Batch too long" }, { status: 413 });
+
+  if (chaosFromRequest(request).has("tts_down")) {
+    return Response.json({ error: "TTS unavailable (chaos)" }, { status: 503 });
+  }
 
   let res: Response;
   try {

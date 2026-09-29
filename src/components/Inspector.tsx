@@ -62,6 +62,17 @@ function EventRow({ e }: { e: TurnEvent }) {
           </details>
         </li>
       );
+    case "recovery":
+      return (
+        <li className="flex items-start gap-2 text-xs">
+          <span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 font-mono text-amber-300 ring-1 ring-amber-500/30">
+            ↻ {e.stage}
+          </span>
+          <span className="flex-1 text-amber-200/80" title={e.detail}>
+            {e.action} · {e.detail}
+          </span>
+        </li>
+      );
     case "error":
       return <li className="text-xs text-rose-300">error ({e.stage}): {e.message}</li>;
     default:
@@ -76,6 +87,7 @@ function Timings({ turn }: { turn: Turn }) {
   if (done?.type === "done") {
     for (const [k, v] of Object.entries(done.timings)) parts.push(`${k} ${v}ms`);
     if (done.provider) parts.push(done.provider);
+    if (done.guardsBypassed) parts.push("GUARDS BYPASSED");
   }
   if (turn.ttfaMs != null) parts.push(`time-to-first-audio ${turn.ttfaMs}ms`);
   if (parts.length === 0) return null;

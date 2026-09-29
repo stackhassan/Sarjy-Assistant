@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { TurnEvent } from "@/lib/events";
 import { runTurn } from "@/lib/orchestrator";
+import { chaosFromRequest, withContext } from "@/lib/reliability/context";
 
 export const maxDuration = 30;
 
@@ -28,7 +29,10 @@ export async function POST(request: Request) {
         controller.enqueue(encoder.encode(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`));
       };
       try {
-        await runTurn({ ...parsed.data, timeZone }, emit, request.signal);
+        // Guard bypass is never available over HTTP; chaos only affects this request.
+        await withContext({ chaos: chaosFromRequest(request) }, () =>
+          runTurn({ ...parsed.data, timeZone }, emit, request.signal),
+        );
       } finally {
         controller.close();
       }

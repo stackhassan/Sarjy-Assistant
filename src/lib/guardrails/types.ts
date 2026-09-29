@@ -5,15 +5,20 @@ export type GuardResult = {
   verdict: GuardVerdict;
   reason: string;
   ms: number;
-  /** What Sarjy says instead when the verdict is "block". */
+  /** What Sarjy says instead when the verdict is "block" (or "repair"). */
   replacement?: string;
 };
 
 export type InputContext = { text: string; history: HistoryMessage[]; signal?: AbortSignal };
-export type OutputContext = { sentence: string; userText: string; signal?: AbortSignal };
 
-export type InputGuard = (ctx: InputContext) => Promise<GuardResult>;
-export type OutputGuard = (ctx: OutputContext) => Promise<GuardResult>;
+export type OutputContext = {
+  sentence: string;
+  userText: string;
+  systemPrompt: string;
+  /** Signals from the input guards that make this turn worth an LLM output check. */
+  risk: { reasons: string[] };
+  signal?: AbortSignal;
+};
 
 export async function timed(
   layer: GuardLayer,

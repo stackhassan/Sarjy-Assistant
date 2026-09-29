@@ -16,7 +16,9 @@ export type TurnEvent =
    * so unscreened text can't be voiced even by a modified client.
    */
   | { type: "sentence"; idx: number; text: string; sig: string }
-  | { type: "done"; turnId: string; provider?: string; timings: Record<string, number> }
+  /** A failure that was handled: failover, retry, fallback source, degraded guard, etc. */
+  | { type: "recovery"; stage: "llm" | "tool" | "guard" | "stt" | "tts"; action: string; detail: string }
+  | { type: "done"; turnId: string; provider?: string; timings: Record<string, number>; guardsBypassed?: boolean }
   | { type: "error"; stage: string; message: string; spokenFallback: string; sig: string };
 
 export type HistoryMessage = { role: "user" | "assistant"; content: string };

@@ -1,22 +1,32 @@
-import { timed, type GuardResult, type InputContext, type OutputContext } from "./types";
+import { screenJailbreak, HEURISTIC_ASSIST_THRESHOLD } from "./l1-input";
+import { MIN_BLOCK_CONFIDENCE, screenTopic } from "./l2-topic";
+import type { GuardResult, InputContext } from "./types";
+
+export { checkGrounding } from "./l3-grounding";
+export { sanitizeForSpeech, screenOutput } from "./l4-output";
+
+export type InputScreen = {
+  results: GuardResult[];
+  /** First blocking result, in layer order (L1 before L2). */
+  blocked: GuardResult | null;
+  /** Reasons the output of this turn deserves an LLM check in L4. */
+  risk: { reasons: string[] };
+};
 
 /**
- * Guardrail entry points used by the orchestrator. The layers are pass-through
- * placeholders for now so the pipeline and Inspector are wired end to end;
- * each gets its real implementation on Day 2 (PRD §7).
+ * L1 (jailbreak / injection) and L2 (topic policy) in parallel. Both take
+ * ~0.2-0.35 s, and the orchestrator runs this alongside the main LLM call, so
+ * on a normal turn they finish before the first sentence is ready.
  */
+export async function screenInput(ctx: InputContext): Promise<InputScreen> {
+  const [l1, l2] = await Promise.all([screenJailbreak(ctx), screenTopic(ctx)]);
+  const results: GuardResult[] = [l1, l2];
 
-/** L1 (jailbreak / injection) + L2 (topic policy), run in parallel. */
-export async function screenInput(ctx: InputContext): Promise<GuardResult[]> {
-  void ctx;
-  return Promise.all([
-    timed("L1_input", async () => ({ verdict: "pass", reason: "not yet implemented" })),
-    timed("L2_topic", async () => ({ verdict: "pass", reason: "not yet implemented" })),
-  ]);
-}
+  const reasons: string[] = [];
+  if (l1.score !== null && l1.score >= HEURISTIC_ASSIST_THRESHOLD) reasons.push(`prompt-guard ${l1.score.toFixed(2)}`);
+  if (l2.category && l2.category !== "allowed" && (l2.confidence ?? 0) < MIN_BLOCK_CONFIDENCE) {
+    reasons.push(`possible ${l2.category}`);
+  }
 
-/** L4: screen one sentence before it is allowed to reach TTS. */
-export async function screenSentence(ctx: OutputContext): Promise<GuardResult> {
-  void ctx;
-  return timed("L4_output", async () => ({ verdict: "pass", reason: "not yet implemented" }));
+  return { results, blocked: results.find((r) => r.verdict === "block") ?? null, risk: { reasons } };
 }

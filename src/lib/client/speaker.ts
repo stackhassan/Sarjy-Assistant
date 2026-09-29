@@ -1,4 +1,5 @@
 import { takeBatch, type Signed } from "@/lib/text/batch";
+import { chaosHeaders } from "./chaos";
 
 /** What actually gets played for one batch: Orpheus audio, or the browser voice. */
 type Clip = { kind: "audio"; url: string } | { kind: "browser"; text: string };
@@ -87,7 +88,7 @@ export class Speaker {
     try {
       const res = await fetch("/api/tts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...chaosHeaders() },
         body: JSON.stringify({ sentences: batch }),
         signal: this.abort.signal,
       });
