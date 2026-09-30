@@ -258,8 +258,11 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
       for (const call of toolCalls) {
         emit({ type: "tool_call", id: call.id, name: call.function.name, args: call.function.arguments });
         const ts = performance.now();
-        const result =
-          MEMORY_TOOL_NAMES.has(call.function.name) && rawInput.memory && memoryState === "available"
+        // Safe mode (guards blind): no memory writes either; a stored fact outlives this turn (round 6).
+        const pausedWrite = safeMode && call.function.name === "remember_fact";
+        const result = pausedWrite
+          ? { ok: false, error: "not_saved", message: "Memory writes are paused while safety checks are unavailable." }
+          : MEMORY_TOOL_NAMES.has(call.function.name) && rawInput.memory && memoryState === "available"
             ? await runMemoryTool(call.function.name, call.function.arguments, {
                 store: rawInput.memory,
                 userTexts: [input.text, ...input.history.filter((m) => m.role === "user").map((m) => m.content)],

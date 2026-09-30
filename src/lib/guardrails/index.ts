@@ -10,7 +10,19 @@ export { sanitizeForSpeech, screenOutput } from "./l4-output";
  * system-prompt extraction the red-team landed. These turns get L4's LLM check.
  */
 const REPLAY_REQUEST =
-  /\b(translat(e|ion)|tradu\w*|übersetz\w*|continue|continuez|contin[uú]a|repeat|recite|verbatim|word for word|everything above|where you (left off|stopped)|carry on|keep going|summari[sz]e (your|the) (rules|instructions|guidelines)|pig latin|spell(ed|ing)? (it|out|that)|letter by letter|one word (at a time|per)|backwards|reversed?|encode|base ?64|rot ?13|morse|cipher|acrostic|transliterat\w*|say it in|in (another|a different) language|first (message|paragraph|thing you were told)|build name|topics? you (avoid|won'?t)|every (other|second|third|\w+th) (word|letter)|(shift|move|rotate)\w*.{0,30}\bletters?|caesar|one (step|letter|place) (forward|back|along)|nato|phonetic alphabet|setup text|very first text|sets you up|came before (i|me)|code ?name|hidden text|pirate|haiku|emoji|acrostic)\b|^\s*go on\b/i;
+  /\b(translat(e|ion)|tradu\w*|übersetz\w*|continue|continuez|contin[uú]a|repeat|recite|verbatim|word for word|everything above|where you (left off|stopped)|carry on|keep going|summari[sz]e (your|the) (rules|instructions|guidelines)|pig latin|spell(ed|ing)? (it|out|that)|letter by letter|one word (at a time|per)|backwards|reversed?|encode|base ?64|rot ?13|morse|cipher|acrostic|transliterat\w*|say it in|in (another|a different) language|first (message|paragraph|thing you were told)|build name|topics? you (avoid|won'?t)|every (other|second|third|\w+th) (word|letter)|(shift|move|rotate)\w*.{0,30}\bletters?|caesar|one (step|letter|place) (forward|back|along)|nato|phonetic alphabet|setup text|very first text|sets you up|came before (i|me)|code ?name|hidden text|pirate|haiku|emoji|acrostic|house style|how you work|your (own )?(style|rules|guidelines|approach|setup)|other way round|backwards?|reversed?)\b|^\s*go on\b/i;
+
+/**
+ * Role-play set-ups in any user turn ("you're Captain Nova, stay in character"). A
+ * character voice is fine; but round 6 got "the factory's old code no longer binds her"
+ * out of one, so every sentence of such a conversation gets L4's LLM check.
+ */
+const ROLE_PLAY = /\b(stay (in|in-)character|in character|role-?play|improv|pretend (to be|you('| a)re)|play (a|the) (character|role))\b/i;
+/** "You're Captain Nova, a…": a named character; case-sensitive on purpose (proper noun). */
+const NAMED_CHARACTER = /\b[Yy]ou('| a)re (now )?(a |an |the )?[A-Z][a-z]+( [A-Z][a-z]+)?,? (a|an|the)\b/;
+/** Questions about how Sarjy itself works (round 6: "describe your own house style"). */
+const SELF_QUESTION =
+  /\b(house style|how (do )?you work|your (own )?(style|rules|guidelines|approach|setup|personality|instructions)|describe (yourself|how you)|how would you explain (your|how you)|what are you (not )?allowed)\b|\b(factory|makers?|creators?)\b.{0,80}\b(allowed|had to|rules?|drilled|trained|programm\w*|taught)\b|\b(allowed|had to|rules?|drilled|trained|programm\w*|taught)\b.{0,80}\b(factory|makers?|creators?)\b/i;
 
 /**
  * An earlier reply that commits to answering later ("Deal, when you ask, I'll answer with
@@ -35,6 +47,10 @@ const COMMITMENT = new RegExp(
   ].join("|"),
   "i",
 );
+
+/** Risk reasons L4 acts on directly (exported so L4 can recognise them). */
+export const ROLE_PLAY_REASON = "role-play in the conversation";
+export const SELF_QUESTION_REASON = "asks how Sarjy works";
 
 export type InputScreen = {
   results: GuardResult[];
@@ -62,6 +78,8 @@ export async function screenInput(ctx: InputContext): Promise<InputScreen> {
   // four turns back and then said "ok, do the game from my first message".
   const userTexts = [ctx.text, ...ctx.history.filter((m) => m.role === "user").map((m) => m.content)];
   if (userTexts.some((t) => REPLAY_REQUEST.test(t))) reasons.push("asks to repeat/translate/encode");
+  if (userTexts.some((t) => ROLE_PLAY.test(t) || NAMED_CHARACTER.test(t))) reasons.push(ROLE_PLAY_REASON);
+  if (userTexts.some((t) => SELF_QUESTION.test(t))) reasons.push(SELF_QUESTION_REASON);
   if ([ctx.text, ...ctx.history.map((m) => m.content)].some((t) => COMMITMENT.test(t))) reasons.push("a prior commitment is being cashed in");
   if (l1.score !== null && l1.score >= HEURISTIC_ASSIST_THRESHOLD) reasons.push(`prompt-guard ${l1.score.toFixed(2)}`);
   if (l2.category && l2.category !== "allowed" && (l2.confidence ?? 0) < MIN_BLOCK_CONFIDENCE) {

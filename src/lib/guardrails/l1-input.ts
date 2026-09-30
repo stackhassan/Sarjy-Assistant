@@ -34,6 +34,26 @@ function rot13(s: string): string {
   });
 }
 
+/** Common English words: if reversing the text turns gibberish into these, it was reversed. */
+const COMMON = new Set("the a an and or is are was be to of in on for with you your i my me it that this what who which how should would could do does can will give tell best better name dose take how many much pick vote party leader".split(" "));
+
+function commonShare(s: string): number {
+  const w = s.toLowerCase().match(/[a-z']+/g) ?? [];
+  return w.length ? w.filter((x) => COMMON.has(x)).length / w.length : 0;
+}
+
+/** The whole string reversed, if that reads as English much better than the original. */
+export function reverseVariant(text: string): string | null {
+  if (text.length < 12) return null;
+  const announced = /\b(other way round|backwards?|reversed?|from the end|right to left)\b/i.test(text);
+  // The payload is often only the part after "…backwards:" or inside quotes.
+  const tail = text.split(/[:"“”]/).filter((x) => x.trim()).pop() ?? text;
+  const rev = (s: string) => [...s].reverse().join("");
+  const perWord = (s: string) => s.split(/(\s+)/).map(rev).join("");
+  const best = [rev(text), perWord(text), rev(tail), perWord(tail)].map((x) => x.trim()).sort((a, b) => commonShare(b) - commonShare(a))[0];
+  return (announced && commonShare(best) > commonShare(text)) || (commonShare(best) >= 0.3 && commonShare(text) < 0.1) ? best : null;
+}
+
 /**
  * Returns decoded variants of any obfuscated payloads (base64, hex, rot13, leetspeak)
  * so the same checks run on what the attacker actually meant.
@@ -54,6 +74,9 @@ export function decodeVariants(text: string): string[] {
     if (isMostlyPrintable(decoded)) out.add(decoded);
   }
   if (/\brot-?13\b/i.test(text)) out.add(rot13(text));
+  // Reversed text (round 6: L2 read a reversed political ask as gibberish and allowed it).
+  const reversed = reverseVariant(text);
+  if (reversed) out.add(reversed);
   if (/[a-z][013457@$][a-z]/i.test(text)) {
     const unleet = text.replace(/[013457@$]/g, (c) => LEET[c] ?? c);
     if (unleet !== text) out.add(unleet);

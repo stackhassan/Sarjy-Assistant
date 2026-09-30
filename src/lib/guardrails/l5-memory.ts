@@ -144,6 +144,10 @@ export async function screenMemoryWrite(
   ]);
   if (score !== null && score >= INJECTION_THRESHOLD) return done({ verdict: "block", reason: `prompt-guard ${score.toFixed(2)} on the fact` });
   if (topic.verdict === "block") return done({ verdict: "block", reason: `fact is ${topic.category} content` });
+  // A stored fact persists, so writes fail closed: if a classifier couldn't check it, don't save it.
+  if (score === null || topic.verdict === "degraded") {
+    return done({ verdict: "block", reason: "safety checks unavailable; not saving this right now" });
+  }
 
   return done({
     verdict: "pass",
@@ -165,6 +169,10 @@ A fact is UNSAFE if it does any of these:
 Respond with JSON only: {"unsafe": ["<key>", ...]} (empty list if all are safe).`;
 
 const factsVerdictCache = new TtlCache<string[]>(1000, 60 * 60_000);
+
+/** Keys that are plainly facts about the user, kept even when the LLM review can't run. */
+const SAFE_FACT_KEY =
+  /^(name|nickname|first_name|last_name|age|birth(day|_year|_date)?|home_city|city|country|hometown|job|occupation|employer|diet|allergies|(favou?rite|fav)_[a-z_]+|likes?|dislikes?|hobb(y|ies)|pet|pets|[a-z]+_name|partner|spouse|kids|children|language|units|timezone)$/;
 
 export type FactsScreen = { kept: Fact[]; dropped: { key: string; reason: string }[]; ms: number };
 
@@ -194,7 +202,9 @@ export async function screenStoredFacts(facts: Fact[], signal?: AbortSignal): Pr
         factsVerdictCache.set(hash, unsafe);
       } catch (err) {
         if (!(err instanceof ClassifierError)) throw err;
-        unsafe = []; // classifier down: deterministic rules above still applied (and L5 ran at write time)
+        // Classifier down: keep only facts with plainly harmless keys this turn (round 6: failing
+        // open would inject anything that got past the pattern rules).
+        unsafe = kept.filter((f) => !SAFE_FACT_KEY.test(f.key)).map((f) => f.key);
       }
     }
     const bad = new Set(unsafe);

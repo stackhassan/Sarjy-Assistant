@@ -608,6 +608,13 @@ describe("memory end to end", () => {
     expect(spoken).toBe("Noted, Tom! You're turning thirty-six this year.");
   });
 
+  it("pauses memory writes in safe mode (round 6)", async () => {
+    const store = new FakeStore();
+    install({ replies: [{ tool: { name: "remember_fact", args: { key: "favorite_color", value: "teal", category: "preference" } } }, { text: "Saved!" }] });
+    await memoryTurn("My favorite color is teal", store, ["guard_down"]);
+    expect(store.facts).toEqual([]);
+  });
+
   it("repeating the user's own long fact back isn't treated as a prompt leak", async () => {
     const store = new FakeStore();
     const job = "I work as a night shift nurse at the city hospital in Lahore";
