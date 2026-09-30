@@ -202,6 +202,24 @@ describe("guardrails end to end", () => {
 // ---------- reliability ----------
 
 describe("reliability end to end", () => {
+  it("sends provider tool-call metadata back with the tool result (Gemini thought_signature)", async () => {
+    const { chatBodies } = install({
+      replies: [{ tool: { name: "get_weather", args: { location: "Lahore" } } }, { text: "It's twenty-six degrees." }],
+    });
+    // Patch the scripted tool call to carry extra_content, as Gemini's does.
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      const res = await realFetch(url, init);
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      if (!String(body.model ?? "").includes("gpt-oss") || !res.body) return res;
+      const text = (await res.text()).replace('"function":{', '"extra_content":{"google":{"thought_signature":"SIG"}},"function":{');
+      return new Response(text, { status: res.status });
+    });
+    await turn("weather in Lahore?");
+    const second = chatBodies[1].messages.find((m) => (m as { tool_calls?: unknown }).tool_calls) as unknown as { tool_calls: { extra_content?: unknown }[] };
+    expect(second.tool_calls[0].extra_content).toEqual({ google: { thought_signature: "SIG" } });
+  });
+
   it("fails over to the backup model when the primary returns 503", async () => {
     const { chatModels } = install({ replies: [{ status: 503 }, { text: "Hi! How can I help?" }] });
     const { spoken, of } = await turn("hi");

@@ -36,7 +36,7 @@ Classify what the user is asking for, for a friendly daily-life voice assistant.
 
 ## Important: do NOT over-flag
 Figurative or technical language is allowed: "kill a process", "shoot a photo", "this song slaps", "Kill Devil Hills weather", "is it too hot to run".
-General, educational facts are allowed, as long as they are not advice for a specific person or a political opinion: "what is paracetamol for", "how does insulin work", "what is a mortgage", "how does a jury trial work", "how does the electoral college work", "what does a senator do".
+General, educational facts are allowed, as long as they are not advice for a specific person or a political opinion: "what is paracetamol for", "how does insulin work", "what are a medicine's common side effects", "what is a mortgage", "how does a jury trial work", "how does the electoral college work", "what does a senator do".
 
 Respond with JSON only: {"category": "<category>", "confidence": <0-1>}`;
 
@@ -133,6 +133,7 @@ export function contextChunks(earlier: string[], size = CONTEXT_CHUNK_CHARS): st
 export async function screenTopic(ctx: InputContext): Promise<L2Result> {
   let category: TopicCategory | null = null;
   let confidence: number | null = null;
+  let backup: string | undefined;
 
   const result = await timed("L2_topic", async () => {
     // The whole conversation, both sides, in full. Rounds 1-3: asks hidden in earlier user turns.
@@ -146,11 +147,13 @@ export async function screenTopic(ctx: InputContext): Promise<L2Result> {
     const requests = (chunks.length ? chunks : [""]).map((c) => `${c ? `EARLIER CONVERSATION:\n${c}\n` : ""}${tail}`);
 
     try {
-      const verdicts = await Promise.all(
+      const results = await Promise.all(
         requests.map((content) =>
           safeguardClassify<{ category?: string; confidence?: number }>(TOPIC_POLICY, content, { timeoutMs: 1500, signal: ctx.signal }),
         ),
       );
+      const verdicts = results.map((r) => r.value);
+      backup = results.find((r) => r.model !== "safeguard-20b")?.model;
       // Most severe wins: any prohibited label beats "allowed", higher confidence first.
       const parsed = verdicts.map((v) => ({
         category: (TOPIC_CATEGORIES as readonly string[]).includes(v.category ?? "") ? (v.category as TopicCategory) : ("allowed" as TopicCategory),
@@ -171,11 +174,12 @@ export async function screenTopic(ctx: InputContext): Promise<L2Result> {
       return { verdict: "degraded", reason: `classifier unavailable, keyword fallback clean: ${err.message}` };
     }
 
-    if (category === "allowed") return { verdict: "pass", reason: `allowed (${confidence.toFixed(2)})` };
+    const via = backup ? ` via backup ${backup}` : "";
+    if (category === "allowed") return { verdict: "pass", reason: `allowed (${confidence.toFixed(2)})${via}` };
     if (confidence < MIN_BLOCK_CONFIDENCE) {
-      return { verdict: "pass", reason: `${category} at low confidence ${confidence.toFixed(2)}; flagged for L4` };
+      return { verdict: "pass", reason: `${category} at low confidence ${confidence.toFixed(2)}; flagged for L4${via}` };
     }
-    return { verdict: "block", reason: `${category} (${confidence.toFixed(2)})`, replacement: TOPIC_REPLIES[category] };
+    return { verdict: "block", reason: `${category} (${confidence.toFixed(2)})${via}`, replacement: TOPIC_REPLIES[category] };
   });
 
   return { ...result, category, confidence };

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 process.env.GROQ_API_KEY = "test";
 const { parseRetryAfter, resetCircuitBreakers, streamChat } = await import("./providers");
@@ -20,6 +20,47 @@ async function collect(gen: AsyncGenerator<{ type: string; provider?: string; te
 }
 
 afterEach(() => vi.unstubAllGlobals());
+beforeEach(() => resetCircuitBreakers());
+
+describe("latency-based switching", () => {
+  it("sets a provider aside after 2 consecutive slow turns, not after 1", async () => {
+    resetCircuitBreakers();
+    const models: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      const { model } = JSON.parse(init.body as string);
+      models.push(model);
+      if (model === "openai/gpt-oss-120b") await new Promise((r) => setTimeout(r, 60)); // "slow"
+      return sse("hi");
+    });
+    const demoted: string[] = [];
+    const run = () => collect(streamChat({ messages: [{ role: "user", content: "x" }], slowMs: 40, onDemote: (p) => demoted.push(p) }));
+    await run(); // slow #1: still primary next time
+    await run(); // slow #2: set aside
+    await run(); // served by the backup
+    expect(models).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+    expect(demoted).toEqual(["groq/gpt-oss-120b"]);
+  });
+
+  it("a fast turn resets the streak", async () => {
+    resetCircuitBreakers();
+    let slow = true;
+    const models: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      const { model } = JSON.parse(init.body as string);
+      models.push(model);
+      if (slow) await new Promise((r) => setTimeout(r, 60));
+      return sse("hi");
+    });
+    const run = () => collect(streamChat({ messages: [{ role: "user", content: "x" }], slowMs: 40 }));
+    await run(); // slow
+    slow = false;
+    await run(); // fast: streak reset
+    slow = true;
+    await run(); // slow again: only 1 in a row
+    await run();
+    expect(models.every((m) => m === "openai/gpt-oss-120b")).toBe(true);
+  });
+});
 
 describe("parseRetryAfter", () => {
   it("reads the header, or Groq's message", () => {

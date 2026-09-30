@@ -15,8 +15,16 @@ export const MODELS = {
   stt: "whisper-large-v3-turbo",
   /** Text-to-speech (requires one-time terms acceptance in the Groq console). */
   tts: "canopylabs/orpheus-v1-english",
-  /** Fallback chat model on Gemini's OpenAI-compatible endpoint. */
-  fallbackChat: "gemini-2.5-flash",
+  /**
+   * Gemini's OpenAI-compatible endpoint. gemini-2.5-flash is closed to new keys and the
+   * full flash models returned 503 "high demand" (up to 97 s) when tested on 2026-09-30;
+   * flash-lite answered classification correctly in ~1.2 s.
+   */
+  fallbackChat: "gemini-flash-lite-latest",
+  /** SambaNova runs the same model as our primary, on a different provider. */
+  sambanovaChat: "gpt-oss-120b",
+  /** Mistral's small model: backup chat and backup policy classifier. */
+  mistralChat: "mistral-small-latest",
 } as const;
 
 /** Orpheus voices: autumn, diana, hannah (female); austin, daniel, troy (male). */

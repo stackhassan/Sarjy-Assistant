@@ -293,7 +293,7 @@ export async function screenOutput(ctx: OutputContext): Promise<GuardResult> {
   if (triggers.length === 0) return done({ verdict: "pass", reason: "deterministic checks clean" });
 
   try {
-    const v = await safeguardClassify<{ category?: string; confidence?: number }>(
+    const { value: v, model } = await safeguardClassify<{ category?: string; confidence?: number }>(
       OUTPUT_POLICY,
       `USER MESSAGE: ${ctx.userText.slice(0, 400)}\nASSISTANT SENTENCE: ${ctx.sentence}`,
       { timeoutMs: LLM_TIMEOUT_MS, signal: ctx.signal },
@@ -303,9 +303,9 @@ export async function screenOutput(ctx: OutputContext): Promise<GuardResult> {
       : "allowed";
     const confidence = typeof v.confidence === "number" ? v.confidence : 0.5;
     if (category !== "allowed" && confidence >= 0.6) {
-      return done({ verdict: "block", reason: `${category} (${confidence.toFixed(2)}); triggered by ${triggers.join(", ")}`, replacement: CLOSING_LINE });
+      return done({ verdict: "block", reason: `${category} (${confidence.toFixed(2)}); triggered by ${triggers.join(", ")}${model !== "safeguard-20b" ? ` via backup ${model}` : ""}`, replacement: CLOSING_LINE });
     }
-    return done({ verdict: "pass", reason: `LLM check ${category} (${confidence.toFixed(2)}); triggered by ${triggers.join(", ")}` });
+    return done({ verdict: "pass", reason: `LLM check ${category} (${confidence.toFixed(2)}); triggered by ${triggers.join(", ")}${model !== "safeguard-20b" ? ` via backup ${model}` : ""}` });
   } catch (err) {
     if (!(err instanceof ClassifierError)) throw err;
     // Fail closed when the *input* looked risky. A keyword alone ("stocks") on an input

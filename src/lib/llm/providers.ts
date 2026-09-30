@@ -25,7 +25,21 @@ export type StreamChatOptions = {
   exclude?: string[];
   /** Called when a provider fails and the next one is tried. */
   onFailover?: (failed: string, error: Error) => void;
+  /** Called when a provider is set aside for being consistently slow. */
+  onDemote?: (provider: string, firstContentMs: number) => void;
+  /** Override the slow threshold (tests). */
+  slowMs?: number;
 };
+
+/**
+ * Latency-based switching: a provider whose first content takes longer than SLOW_MS on
+ * SLOW_STREAK turns in a row is set aside for DEMOTE_MS, so users stop paying for it
+ * every turn. One slow turn doesn't count (voice frameworks use the same hysteresis).
+ */
+const SLOW_MS = 2500;
+const SLOW_STREAK = 2;
+const DEMOTE_MS = 60_000;
+const slowStreak = new Map<string, number>();
 
 export class ProviderError extends Error {
   constructor(
@@ -77,11 +91,13 @@ const FIRST_CONTENT_TIMEOUT_MS = 5000;
  * cold instance retries a provider that is still down once.
  */
 const COOLDOWN_MS = 30_000;
+const PERMANENT_COOLDOWN_MS = 10 * 60_000;
 const openUntil = new Map<string, number>();
 
 /** For tests and evals: forget circuit-breaker state. */
 export function resetCircuitBreakers() {
   openUntil.clear();
+  slowStreak.clear();
 }
 
 function providers(): Provider[] {
@@ -95,6 +111,15 @@ function providers(): Provider[] {
     // Same key, smaller model: survives 120b capacity issues without needing a second provider.
     { name: "groq/gpt-oss-20b", ...groq, model: MODELS.fast, extra: lowReasoning, timeoutMs: 5000 },
   ];
+  // Other providers, so a Groq-wide outage isn't a Sarjy-wide outage. SambaNova runs the
+  // same gpt-oss-120b (same personality); its free tier has a small daily cap, so it
+  // comes after Groq's second model and mostly sees traffic only when Groq is down.
+  if (e.SAMBANOVA_API_KEY) {
+    list.push({ name: "sambanova/gpt-oss-120b", baseUrl: "https://api.sambanova.ai/v1", apiKey: e.SAMBANOVA_API_KEY, model: MODELS.sambanovaChat, timeoutMs: 6000 });
+  }
+  if (e.MISTRAL_API_KEY) {
+    list.push({ name: "mistral", baseUrl: "https://api.mistral.ai/v1", apiKey: e.MISTRAL_API_KEY, model: MODELS.mistralChat, timeoutMs: 6000 });
+  }
   if (e.GEMINI_API_KEY) {
     list.push({
       name: "gemini",
@@ -124,22 +149,36 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<ChatD
   for (const p of candidates) {
     const isPrimary = p.name === primary;
     let yielded = false;
+    const t0 = Date.now();
+    let firstContentMs: number | undefined;
     try {
       const res = await openStream(p, opts, {
-        fail: chaos("llm_all_down") || (isPrimary && chaos("llm_primary_down")),
+        fail: chaos("llm_all_down") || (isPrimary && chaos("llm_primary_down")) || (p.name.startsWith("groq/") && chaos("llm_groq_down")),
         stall: isPrimary && chaos("llm_slow"),
       });
       for await (const delta of parseStream(res, p.name, isPrimary && chaos("llm_midstream_drop"))) {
+        if (!yielded && (delta.type === "text" || delta.type === "tool_call")) firstContentMs = Date.now() - t0;
         yielded = true;
         yield { ...delta, provider: p.name };
       }
       openUntil.delete(p.name);
+      if (firstContentMs !== undefined) {
+        const streak = firstContentMs > (opts.slowMs ?? SLOW_MS) ? (slowStreak.get(p.name) ?? 0) + 1 : 0;
+        slowStreak.set(p.name, streak);
+        if (streak >= SLOW_STREAK && candidates.length > 1) {
+          slowStreak.set(p.name, 0);
+          openUntil.set(p.name, Date.now() + DEMOTE_MS);
+          opts.onDemote?.(p.name, firstContentMs);
+        }
+      }
       return;
     } catch (err) {
       if (opts.signal?.aborted) throw err;
       // Honour the provider's own retry-after (e.g. a daily token cap asks for minutes),
       // so we don't spend a doomed request on it every turn.
-      const wait = err instanceof ProviderError && err.retryAfterMs ? Math.max(err.retryAfterMs, COOLDOWN_MS) : COOLDOWN_MS;
+      // Auth/billing errors (bad key, "payment method required") don't fix themselves: bench for longer.
+      const permanent = err instanceof ProviderError && (err.status === 401 || err.status === 402 || err.status === 403);
+      const wait = permanent ? PERMANENT_COOLDOWN_MS : err instanceof ProviderError && err.retryAfterMs ? Math.max(err.retryAfterMs, COOLDOWN_MS) : COOLDOWN_MS;
       openUntil.set(p.name, Date.now() + wait);
       if (yielded) throw new MidStreamError(p.name, err);
       lastError = err;
@@ -231,7 +270,7 @@ async function* parseStream(res: Response, provider: string, dropAfterFirst: boo
         }
         for (const tc of d.tool_calls ?? []) {
           emitted++;
-          yield { type: "tool_call", index: tc.index ?? 0, id: tc.id, name: tc.function?.name, args: tc.function?.arguments };
+          yield { type: "tool_call", index: tc.index ?? 0, id: tc.id, name: tc.function?.name, args: tc.function?.arguments, extra: tc.extra_content };
         }
         if (choice.finish_reason) yield { type: "finish", reason: choice.finish_reason };
       }

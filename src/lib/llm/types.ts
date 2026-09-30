@@ -4,6 +4,11 @@ export type ToolCall = {
   id: string;
   type: "function";
   function: { name: string; arguments: string };
+  /**
+   * Provider-specific data that must be sent back with the call (Gemini returns a
+   * `thought_signature` here and rejects the follow-up request without it).
+   */
+  extra_content?: unknown;
 };
 
 export type ChatMessage =
@@ -20,5 +25,5 @@ export type ToolChoice = "auto" | "none" | "required" | { type: "function"; func
 
 export type ChatDelta =
   | { type: "text"; text: string }
-  | { type: "tool_call"; index: number; id?: string; name?: string; args?: string }
+  | { type: "tool_call"; index: number; id?: string; name?: string; args?: string; extra?: unknown }
   | { type: "finish"; reason: string | null };

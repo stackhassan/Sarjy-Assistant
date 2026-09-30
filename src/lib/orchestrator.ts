@@ -181,6 +181,8 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
             tools: toolSpecs,
             signal: llmSignal,
             exclude,
+            onDemote: (slow, ms) =>
+              emit({ type: "recovery", stage: "llm", action: "slow provider set aside", detail: `${slow} first content ${ms} ms on consecutive turns; using the next provider for a minute` }),
             onFailover: (failed, err) =>
               emit({ type: "recovery", stage: "llm", action: "failover", detail: `${failed} → next provider (${err.message.slice(0, 120)})` }),
           })) {
@@ -197,6 +199,7 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
               if (d.id) c.id = d.id;
               if (d.name) c.function.name += d.name;
               if (d.args) c.function.arguments += d.args;
+              if (d.extra !== undefined) c.extra_content = d.extra;
               calls.set(d.index, c);
             }
           }

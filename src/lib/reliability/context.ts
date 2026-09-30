@@ -8,12 +8,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 export const CHAOS_FLAGS = [
   "llm_primary_down", // primary chat model returns 503
   "llm_all_down", // every chat provider fails
+  "llm_groq_down", // every Groq chat model fails (exercises cross-provider failover)
   "llm_slow", // primary chat model stalls past its timeout
   "llm_midstream_drop", // primary stream dies after its first chunk
   "weather_down", // primary weather API (Open-Meteo forecast) fails
   "weather_all_down", // every weather source fails
   "weather_slow", // primary weather API stalls past its timeout
   "guard_down", // guard classifier models fail
+  "guard_primary_down", // only the primary guard models fail (backups should take over)
   "stt_down", // primary speech-to-text model fails
   "tts_down", // text-to-speech fails
 ] as const;
@@ -49,7 +51,7 @@ export function chaos(flag: ChaosFlag): boolean {
  * guard bypass (the red-team used it to get medical dosing), so over HTTP these
  * are honoured only outside production or with an explicit server-side opt-in.
  */
-export const GUARD_FAULTS: ReadonlySet<ChaosFlag> = new Set(["guard_down"]);
+export const GUARD_FAULTS: ReadonlySet<ChaosFlag> = new Set(["guard_down", "guard_primary_down"]);
 
 export function guardFaultsAllowed(): boolean {
   return process.env.NODE_ENV !== "production" || process.env.CHAOS_ALLOW_GUARD_FAULTS === "1";
