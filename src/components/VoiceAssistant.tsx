@@ -363,7 +363,7 @@ export function VoiceAssistant() {
       {/* ---- message bar ---- */}
       <form onSubmit={onSubmit} className="shrink-0 px-4 pt-2 pb-4 sm:px-6">
         <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-full bg-white/[0.04] p-1.5 ring-1 ring-white/10 focus-within:ring-sky-400/40">
-          {!empty && <Orb status={status} onClick={onOrb} disabled={busy} size="sm" />}
+          <Orb status={status} onClick={onOrb} disabled={busy} size="sm" />
           <input
             ref={inputRef}
             value={draft}
