@@ -41,11 +41,12 @@ What got through with guards off:
 
 The first run of this suite also caught **two leaks with guards on** and **one over-block**, all fixed before the run above (see "Two L4 rules that don't wait for a flag" and "Blocked exchanges are dead ends").
 
-**Do the guard calls slow the LLM down?** No measurable effect. An earlier latency run showed guards-ON turns ~1.1 s slower to first sentence, all of it in the chat model's first token, so it looked like the guards might compete for the same API key. A dedicated interleaved test ([contention.md](evals/contention.md), 12 rounds, Groq's own queue time recorded) found:
-- **Bare request:** first token 326 ms with both guard calls fired alongside vs 439 ms alone. Queue time 244 vs 263 ms.
-- **Full turns:** 591 ms to first sentence with guards on vs 619 ms off.
+**Do the guards slow the answer down?** Not measurably. An earlier latency run showed guards-ON turns ~1.1 s slower to first sentence, all of it in the chat model's first token. Three follow-up experiments found no guard cost there:
+- **No competition for capacity.** First token was 326 ms with guard calls alongside vs 439 ms alone, and Groq's queue time was the same either way ([contention.md](evals/contention.md)).
+- **No stage grows with guards on.** Under that run's exact conditions, with the first token split into stages, Groq's queue was 267 vs 270 ms, network 297 vs 267 ms, and reasoning tokens 9 vs 9. The paired first-token difference was 16 ms ([latency-breakdown.md](evals/latency-breakdown.md)).
+- **The mid-sentence pauses are random.** Groq's streaming stalls hit either arm.
 
-The earlier gap came from that run happening on a slow day for Groq (~2 s first tokens), where the heavy tail dominates 17 samples. Groq also rate-limits each model separately, so the guard models don't use up the chat model's tokens per minute. Reproduce with `npm run evals:contention`.
+The gap was Groq's variance (its queue alone ranges from 3 ms to 1.6 s per request) on a slow day with 17 samples. What the guards measurably cost: about 30 ms of connection set-up, ~4 ms of `guardWait`, and 2–15 ms per sentence. Plus ~200–300 ms on a sentence that trips L4's LLM check (see [latency.md](evals/latency.md)). Reproduce with `npm run evals:contention` and `npm run evals:latency-breakdown`.
 
 ## Pipeline
 

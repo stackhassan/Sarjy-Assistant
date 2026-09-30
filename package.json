@@ -14,7 +14,8 @@
     "evals:latency": "vitest run -c vitest.evals.config.mts evals/latency.eval.ts",
     "evals:reliability": "vitest run -c vitest.evals.config.mts evals/reliability.eval.ts",
     "evals:contention": "vitest run -c vitest.evals.config.mts evals/contention.eval.ts",
-    "evals:guard-hedge": "vitest run -c vitest.evals.config.mts evals/guard-hedge.eval.ts"
+    "evals:guard-hedge": "vitest run -c vitest.evals.config.mts evals/guard-hedge.eval.ts",
+    "evals:latency-breakdown": "vitest run -c vitest.evals.config.mts evals/latency-breakdown.eval.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

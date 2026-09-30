@@ -29,6 +29,12 @@ export type StreamChatOptions = {
   onDemote?: (provider: string, firstContentMs: number) => void;
   /** Override the slow threshold (tests). */
   slowMs?: number;
+  /**
+   * Latency breakdown of the attempt that answered: request sent, response headers,
+   * first reasoning chunk (gpt-oss "thinks" before it writes), and from the final chunk
+   * Groq's own queue time and the number of reasoning tokens. Numbers are ms or counts.
+   */
+  onTiming?: (mark: "llmRequest" | "llmHeaders" | "firstReasoning" | "groqQueueMs" | "reasoningTokens", value?: number) => void;
 };
 
 /**
@@ -156,7 +162,7 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<ChatD
         fail: chaos("llm_all_down") || (isPrimary && chaos("llm_primary_down")) || (p.name.startsWith("groq/") && chaos("llm_groq_down")),
         stall: isPrimary && chaos("llm_slow"),
       });
-      for await (const delta of parseStream(res, p.name, isPrimary && chaos("llm_midstream_drop"))) {
+      for await (const delta of parseStream(res, p.name, isPrimary && chaos("llm_midstream_drop"), opts.onTiming)) {
         if (!yielded && (delta.type === "text" || delta.type === "tool_call")) firstContentMs = Date.now() - t0;
         yielded = true;
         yield { ...delta, provider: p.name };
@@ -200,6 +206,7 @@ async function openStream(
   try {
     if (inject.fail) throw new ProviderError(p.name, 503, `${p.name} 503: simulated outage (chaos)`);
     if (inject.stall) await sleep(p.timeoutMs + 1000, signal);
+    opts.onTiming?.("llmRequest");
     const res = await fetch(`${p.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${p.apiKey}` },
@@ -219,6 +226,7 @@ async function openStream(
       const retryAfterMs = res.status === 429 ? parseRetryAfter(res.headers.get("retry-after"), body) : undefined;
       throw new ProviderError(p.name, res.status, `${p.name} ${res.status}: ${body.slice(0, 200)}`, retryAfterMs);
     }
+    opts.onTiming?.("llmHeaders");
     return res;
   } catch (err) {
     if (err instanceof ProviderError) throw err;
@@ -231,7 +239,13 @@ async function openStream(
 }
 
 /** Parses an OpenAI-style SSE body into text / tool-call / finish deltas, with stall detection. */
-async function* parseStream(res: Response, provider: string, dropAfterFirst: boolean): AsyncGenerator<ChatDelta> {
+async function* parseStream(
+  res: Response,
+  provider: string,
+  dropAfterFirst: boolean,
+  onTiming?: StreamChatOptions["onTiming"],
+): AsyncGenerator<ChatDelta> {
+  let reasoningSeen = false;
   const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
   let buf = "";
   let emitted = 0;
@@ -258,9 +272,20 @@ async function* parseStream(res: Response, provider: string, dropAfterFirst: boo
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (data === "[DONE]") return;
-        const choice = JSON.parse(data).choices?.[0];
+        const chunk = JSON.parse(data);
+        const usage = chunk.x_groq?.usage ?? chunk.usage;
+        if (usage) {
+          if (typeof usage.queue_time === "number") onTiming?.("groqQueueMs", Math.round(usage.queue_time * 1000));
+          const r = usage.completion_tokens_details?.reasoning_tokens;
+          if (typeof r === "number") onTiming?.("reasoningTokens", r);
+        }
+        const choice = chunk.choices?.[0];
         if (!choice) continue;
         const d = choice.delta ?? {};
+        if (!reasoningSeen && (d.reasoning || d.reasoning_content)) {
+          reasoningSeen = true;
+          onTiming?.("firstReasoning");
+        }
         if (d.content) {
           if (dropAfterFirst && emitted > 0) {
             throw new ProviderError(provider, "dropped", `${provider} connection dropped (chaos)`);

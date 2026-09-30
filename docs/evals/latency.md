@@ -13,7 +13,26 @@ All times in ms, measured server-side from request start. "First sentence" is wh
 | First token, all | 2233 / 8223 | 1939 / 4607 | +294 | 29 / 29 |
 | Total turn, all | 2394 / 8640 | 1942 / 4999 | +452 | 29 / 29 |
 
-**About the +1.1 s:** the guards don't cause it. In these samples the gap is entirely in the chat model's *first token* (the guards finish in ~154 ms, and `guardWait` is 0), which pointed at either the guard calls competing with the chat request on the same Groq key, or noise. A dedicated interleaved test ([contention.md](contention.md)) found no competition. Chat first token was 326 ms with both guard calls fired alongside versus 439 ms alone, and Groq's own `queue_time` was the same either way (244 vs 263 ms). Full turns: 591 ms to first sentence with guards on versus 619 ms off (p50, n = 12 each). The earlier gap came from this run happening on a slow day for Groq (first tokens around 2 s, versus about 0.5 s in the contention run), where its heavy tail dominates 17–18 samples. On Groq, the guard models also have their own per-model rate limits, so they don't use up the chat model's tokens per minute.
+**About the +1.1 s:** the guards don't cause it, and it doesn't reproduce. In this run the gap is entirely in the chat model's *first token* (the guards finish in ~154 ms, and `guardWait` is 0). Three follow-up experiments:
+1. **Competing for capacity?** No. A bare request's first token was 326 ms with both guard calls fired alongside vs 439 ms alone, and Groq's own queue time was the same either way ([contention.md](contention.md), n = 12, on gpt-oss-120b). Groq also rate-limits each model separately.
+2. **The same conditions as this run, with the first token split into stages** ([latency-breakdown.md](latency-breakdown.md), 24 alternated pairs). ON vs OFF, medians:
+
+   | Stage | ON | OFF |
+   |---|---|---|
+   | Request sent | 3 ms | 1 ms |
+   | Groq queue | 267 ms | 270 ms |
+   | Network and connection | 297 ms | 267 ms |
+   | Reasoning tokens | 9 | 9 |
+   | **First token** | **778 ms** | **733 ms** |
+
+   The paired difference was **16 ms**, with ON slower in 13 of 22 pairs (a coin flip).
+3. **Pauses mid-sentence** (the model sends its first token, then stalls before finishing the sentence). The breakdown run showed more of these with guards on, 3 of 4 times on one prompt. A targeted re-run of that prompt (8 pairs) found the opposite: the long pauses (749 ms, 202 ms) were all guards-off. They're Groq's streaming, at random.
+
+So the gap came from Groq's variance, which is larger than any guard effect. Its queue time alone ranges from 3 ms to 1.6 s per request, and this run had 17–18 samples per arm on a slow day. (12 of 17 pairs slower is p ≈ 0.14 on a sign test, consistent with chance.)
+
+What the guards actually cost, measured: about 2 ms before the chat request is sent, about 30 ms of extra connection set-up, `guardWait` about 4 ms, and 2–15 ms per sentence for L4's deterministic checks. On top of that, about 200–300 ms on a sentence that trips L4's LLM check, which none of these chat prompts did.
+
+Unrelated to guards, the first token is roughly one-third Groq queue, one-third network and connection, and one-third model. The network share is inflated in these runs because they ran from a laptop in Pakistan against Groq's US servers. A deployment near Groq (e.g. a US-east Vercel region) and a warm keep-alive connection would cut it for everyone.
 
 ## Where guard time goes (guards ON)
 
