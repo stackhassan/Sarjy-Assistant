@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { TurnEvent } from "@/lib/events";
 import { demoMode } from "@/lib/guardrails/policy";
 import { redact } from "@/lib/redact";
+import { memoryFromRequest } from "@/lib/memory/auth";
 import { runTurn } from "@/lib/orchestrator";
 import { chaosFromRequest, withContext } from "@/lib/reliability/context";
 
@@ -37,7 +38,7 @@ export async function POST(request: Request) {
       try {
         // Guard bypass is never available over HTTP; chaos only affects this request.
         await withContext({ chaos: chaosFromRequest(request) }, () =>
-          runTurn({ ...parsed.data, timeZone }, emit, request.signal),
+          runTurn({ ...parsed.data, timeZone, memory: memoryFromRequest(request) }, emit, request.signal),
         );
       } finally {
         controller.close();

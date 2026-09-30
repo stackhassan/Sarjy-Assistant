@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Recorder } from "@/lib/client/recorder";
+import { authHeaders } from "@/lib/client/auth";
 import { chaosFlags, chaosHeaders } from "@/lib/client/chaos";
 import { ThinkingEarcon } from "@/lib/client/earcon";
 import { Speaker, type VoiceSource } from "@/lib/client/speaker";
@@ -11,6 +12,7 @@ import { TTS_VOICE } from "@/lib/llm/models";
 import { readEvents } from "@/lib/client/sse";
 import type { HistoryMessage, TurnEvent } from "@/lib/events";
 import { Inspector } from "./Inspector";
+import { MemoryDrawer } from "./MemoryDrawer";
 import { Orb, type AssistantStatus } from "./Orb";
 
 export type Turn = {
@@ -46,6 +48,8 @@ export function VoiceAssistant() {
   /** Consecutive "didn't catch that" turns, for escalating reprompts. */
   const misses = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** Bumped after each turn so the memory drawer refreshes. */
+  const [memoryRev, setMemoryRev] = useState(0);
   // Read from the URL on the client only; the server render has no flags.
   const chaosKey = useSyncExternalStore(noopSubscribe, () => chaosFlags().join(","), () => "");
   const chaos = chaosKey ? chaosKey.split(",") : [];
@@ -134,7 +138,7 @@ export function VoiceAssistant() {
     try {
       const res = await fetch("/api/turn", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...chaosHeaders() },
+        headers: { "Content-Type": "application/json", ...chaosHeaders(), ...(await authHeaders()) },
         body: JSON.stringify({ text, history, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
         signal: ac.signal,
       });
@@ -164,6 +168,7 @@ export function VoiceAssistant() {
       say("unreachable");
     } finally {
       if (inflight.current === ac) inflight.current = null;
+      setMemoryRev((r) => r + 1);
       if (!speaker.current?.speaking) earcon.current.stop();
       setStatus((s) => (s === "thinking" && !speaker.current?.speaking ? "idle" : s));
     }
@@ -226,6 +231,7 @@ export function VoiceAssistant() {
   return (
     <div className={`grid min-h-dvh grid-cols-1 ${DEMO ? "lg:grid-cols-[1fr_380px]" : ""}`}>
       <main className="flex min-h-dvh flex-col items-center px-4 py-10">
+        <MemoryDrawer refreshKey={memoryRev} />
         <header className="mb-8 text-center">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-100">Sarjy</h1>
           <p className="text-sm text-slate-400">{DEMO ? "A voice assistant with guardrails you can watch." : "Your friendly voice assistant."}</p>

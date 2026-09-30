@@ -18,6 +18,7 @@ export const CHAOS_FLAGS = [
   "guard_primary_down", // only the primary guard models fail (backups should take over)
   "stt_down", // primary speech-to-text model fails
   "tts_down", // text-to-speech fails
+  "memory_down", // the memory database fails
 ] as const;
 
 export type ChaosFlag = (typeof CHAOS_FLAGS)[number];

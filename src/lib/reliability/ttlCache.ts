@@ -29,6 +29,10 @@ export class TtlCache<V> {
     while (this.map.size > this.maxEntries) this.map.delete(this.map.keys().next().value!);
   }
 
+  delete(key: string) {
+    this.map.delete(key);
+  }
+
   clear() {
     this.map.clear();
   }

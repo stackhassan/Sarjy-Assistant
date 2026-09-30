@@ -8,7 +8,8 @@ A voice assistant with layered, measured guardrails, built for the Sarj take-hom
 |---|---|
 | [docs/PRD.md](docs/PRD.md) | Product and technical design |
 | [docs/guardrails.md](docs/guardrails.md) | The guard layers, results, the red-team's 9 breaks and their fixes, trade-offs |
-| [docs/reliability.md](docs/reliability.md) | How every failure (LLM, weather, guards, STT, TTS) is handled |
+| [docs/reliability.md](docs/reliability.md) | How every failure (LLM, weather, guards, STT, TTS, memory) is handled |
+| [docs/memory.md](docs/memory.md) | How memory works: anonymous sign-in, RLS, the L5 write guard, recall, forget |
 | [docs/evals/](docs/evals/) | Generated reports: scorecard, latency, reliability |
 | [docs/decisions/](docs/decisions/) | Architecture decision records |
 

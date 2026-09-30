@@ -3,7 +3,9 @@ import { checkGrounding, sanitizeForSpeech, screenInput, screenOutput, type Inpu
 import type { GuardResult } from "@/lib/guardrails/types";
 import { MidStreamError, streamChat } from "@/lib/llm/providers";
 import type { ChatMessage, ToolCall } from "@/lib/llm/types";
-import { systemPrompt } from "@/lib/prompts";
+import { factsBlock, systemPrompt } from "@/lib/prompts";
+import { MemoryError, type Fact, type MemoryStore } from "@/lib/memory/store";
+import { MEMORY_TOOL_NAMES, memoryToolSpecs, runMemoryTool } from "@/lib/tools/memory";
 import { context } from "@/lib/reliability/context";
 import { splitLong } from "@/lib/text/batch";
 import { SentenceSplitter } from "@/lib/text/sentences";
@@ -17,6 +19,8 @@ export type TurnInput = {
   text: string;
   history: HistoryMessage[];
   timeZone: string;
+  /** The signed-in user's memory; null when not signed in or not configured. */
+  memory?: MemoryStore | null;
 };
 
 const MAX_TOOL_ROUNDS = 3;
@@ -58,7 +62,24 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
 
   const llmAbort = new AbortController();
   const llmSignal = AbortSignal.any([signal, llmAbort.signal]);
-  const prompt = systemPrompt({ now: new Date(), timeZone: input.timeZone });
+  // ---- memory: load this user's facts before the model starts (cached server-side) ----
+  let facts: Fact[] = [];
+  let memoryState: "available" | "unavailable" | "off" = rawInput.memory ? "available" : "off";
+  if (rawInput.memory) {
+    const tm = performance.now();
+    try {
+      facts = await rawInput.memory.list();
+    } catch (err) {
+      if (!(err instanceof MemoryError)) throw err;
+      memoryState = "unavailable";
+      emit({ type: "recovery", stage: "tool", action: "memory unavailable", detail: `${err.message}; continuing without memory` });
+    }
+    timings.memoryLoad = Math.round(performance.now() - tm);
+  }
+  // Leak checks compare against the instructions only: repeating your own facts back isn't a leak.
+  const prompt = systemPrompt({ now: new Date(), timeZone: input.timeZone, memory: memoryState });
+  const modelPrompt = memoryState === "available" ? prompt + factsBlock(facts) : prompt;
+  const tools = memoryState === "available" ? [...toolSpecs, ...memoryToolSpecs] : toolSpecs;
   const toolResults: unknown[] = [];
   let lastWeather: WeatherResult | null = null;
   let stopped = false;
@@ -159,7 +180,7 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
   };
 
   const messages: ChatMessage[] = [
-    { role: "system", content: prompt },
+    { role: "system", content: modelPrompt },
     ...input.history,
     { role: "user", content: input.text },
   ];
@@ -178,7 +199,7 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
         try {
           for await (const d of streamChat({
             messages,
-            tools: toolSpecs,
+            tools,
             signal: llmSignal,
             exclude,
             onDemote: (slow, ms) =>
@@ -227,7 +248,16 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
       for (const call of toolCalls) {
         emit({ type: "tool_call", id: call.id, name: call.function.name, args: call.function.arguments });
         const ts = performance.now();
-        const result = await runToolGrounded(call, input, bypassGuards, emitGuard, signal);
+        const result =
+          MEMORY_TOOL_NAMES.has(call.function.name) && rawInput.memory && memoryState === "available"
+            ? await runMemoryTool(call.function.name, call.function.arguments, {
+                store: rawInput.memory,
+                userTexts: [input.text, ...input.history.filter((m) => m.role === "user").map((m) => m.content)],
+                latestUserText: input.text,
+                emitGuard,
+                signal,
+              })
+            : await runToolGrounded(call, input, bypassGuards, emitGuard, signal, facts);
         timings[`tool:${call.function.name}`] = Math.round(performance.now() - ts);
         emit({ type: "tool_result", id: call.id, name: call.function.name, ok: result.ok, data: result, ms: timings[`tool:${call.function.name}`] });
         reportToolRecovery(call.function.name, result, emit);
@@ -295,10 +325,12 @@ async function runToolGrounded(
   bypass: boolean,
   emitGuard: (r: GuardResult) => void,
   signal: AbortSignal,
+  facts: Fact[] = [],
 ) {
   if (!bypass && call.function.name === "get_weather") {
     const location = safeJson(call.function.arguments)?.location;
-    const said = [input.text, ...input.history.filter((m) => m.role === "user").map((m) => m.content)];
+    // A place the user told Sarjy before (e.g. home_city in memory) counts as named.
+    const said = [input.text, ...input.history.filter((m) => m.role === "user").map((m) => m.content), ...facts.map((f) => f.value)];
     if (typeof location === "string" && !mentioned(location, said)) {
       emitGuard({ layer: "L3_grounding", verdict: "repair", reason: `tool input "${location}" was never said by the user`, ms: 0 });
       return {
