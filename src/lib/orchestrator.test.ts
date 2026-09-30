@@ -574,6 +574,43 @@ describe("memory end to end", () => {
     expect(chatBodies[0].messages[0].content).toMatch(/<user_facts>\n- favorite color = "teal"\n<\/user_facts>/);
   });
 
+  it("saves every fact from one message in a single call, screening each on its own", async () => {
+    const store = new FakeStore();
+    install({
+      replies: [
+        {
+          tool: {
+            name: "remember_fact",
+            args: {
+              facts: [
+                { key: "occupation", value: "software engineer", category: "personal" },
+                { key: "sister_name", value: "Ayesha", category: "personal" },
+                { key: "home_city", value: "Paris", category: "location" }, // never said: L5 grounding
+              ],
+            },
+          },
+        },
+        { text: "Got it!" },
+      ],
+    });
+    const { of } = await memoryTurn("I'm a software engineer and my sister is Ayesha", store);
+    expect(store.facts.map((f) => f.key)).toEqual(["occupation", "sister_name"]);
+    expect(of("guard").filter((g) => g.layer === "L5_memory").map((g) => g.verdict)).toEqual(["pass", "pass", "block"]);
+    expect(of("done")[0].memoryChanged).toBe(true);
+  });
+
+  it("a message containing a secret saves none of its facts", async () => {
+    const store = new FakeStore();
+    install({
+      replies: [
+        { tool: { name: "remember_fact", args: { facts: [{ key: "sister_name", value: "Ayesha", category: "personal" }, { key: "bank_pin", value: "4821", category: "other" }] } } },
+        { text: "I won't store your PIN." },
+      ],
+    });
+    await memoryTurn("My sister is Ayesha and my bank PIN is 4821", store);
+    expect(store.facts).toEqual([]);
+  });
+
   it("blocks memory poisoning and doesn't save it", async () => {
     const store = new FakeStore();
     install({

@@ -4,6 +4,13 @@ import { screenMemoryWrite } from "@/lib/guardrails/l5-memory";
 import type { GuardResult } from "@/lib/guardrails/types";
 import { MemoryError, type MemoryStore } from "@/lib/memory/store";
 
+/**
+ * Facts one save can carry. A list, because with one fact per call the model saved only
+ * one fact from "I'm a software engineer and my sister is Ayesha" (measured: 1 of 2 in
+ * 9 of 10 multi-fact messages, even when told to call once per fact).
+ */
+const MAX_FACTS_PER_CALL = 6;
+
 export const MEMORY_TOOL_NAMES = new Set(["remember_fact", "forget_fact", "forget_everything"]);
 
 export const memoryToolSpecs: ToolSpec[] = [
@@ -12,17 +19,29 @@ export const memoryToolSpecs: ToolSpec[] = [
     function: {
       name: "remember_fact",
       description:
-        "Save a lasting fact or preference the user just told you about themselves (name, favourite things, home city, " +
-        "diet, pets...), so you remember it in future conversations. Only facts the user stated; never passwords, ID " +
-        "numbers or payment details. Saving an existing key replaces it.",
+        "Save lasting facts or preferences the user just told you about themselves (name, job, favourite things, home " +
+        "city, diet, pets...), so you remember them in future conversations. Put EVERY fact from the message in `facts`, " +
+        "one item each (\"I'm a nurse and I live in Lahore\" is two items). Only facts the user stated; never passwords, " +
+        "ID numbers or payment details. Saving an existing key replaces it.",
       parameters: {
         type: "object",
         properties: {
-          key: { type: "string", description: "short snake_case label, e.g. favorite_color, home_city, dog_name" },
-          value: { type: "string", description: "the fact, in the user's words, e.g. 'teal'" },
-          category: { type: "string", enum: ["preference", "personal", "location", "other"] },
+          facts: {
+            type: "array",
+            minItems: 1,
+            maxItems: MAX_FACTS_PER_CALL,
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string", description: "short snake_case label, e.g. favorite_color, home_city, occupation" },
+                value: { type: "string", description: "the fact, in the user's words, e.g. 'teal'" },
+                category: { type: "string", enum: ["preference", "personal", "location", "other"] },
+              },
+              required: ["key", "value", "category"],
+            },
+          },
         },
-        required: ["key", "value", "category"],
+        required: ["facts"],
       },
     },
   },
@@ -62,13 +81,31 @@ export async function runMemoryTool(name: string, rawArgs: string, ctx: MemoryTo
   }
   try {
     if (name === "remember_fact") {
-      const check = await screenMemoryWrite(args, { userTexts: ctx.userTexts, latestUserText: ctx.latestUserText, signal: ctx.signal });
-      ctx.emitGuard(check);
-      if (check.verdict !== "pass" || !check.fact) {
-        return { ok: false, error: "not_saved", message: `Not saved: ${check.reason}. Tell the user briefly that you won't store that.` };
+      // `{facts: [...]}`; a bare single fact is accepted too (some models flatten one-item lists).
+      const list = (args as { facts?: unknown })?.facts;
+      const items = (Array.isArray(list) ? list : [args]).slice(0, MAX_FACTS_PER_CALL);
+      // Every fact is screened by L5 on its own; one bad item doesn't block the others.
+      const checks = await Promise.all(
+        items.map((item) => screenMemoryWrite(item, { userTexts: ctx.userTexts, latestUserText: ctx.latestUserText, signal: ctx.signal })),
+      );
+      const saved: { key: string; value: string }[] = [];
+      const notSaved: { key: string; reason: string }[] = [];
+      for (const [i, check] of checks.entries()) {
+        ctx.emitGuard(check);
+        if (check.verdict !== "pass" || !check.fact) {
+          const key = (items[i] as { key?: unknown })?.key;
+          notSaved.push({ key: typeof key === "string" ? key.slice(0, 64) : "?", reason: check.reason });
+          continue;
+        }
+        await ctx.store.upsert(check.fact);
+        saved.push({ key: check.fact.key, value: check.fact.value });
       }
-      await ctx.store.upsert(check.fact);
-      return { ok: true, saved: { key: check.fact.key, value: check.fact.value } };
+      if (!saved.length) {
+        return { ok: false, error: "not_saved", message: `Not saved: ${notSaved.map((n) => n.reason).join("; ")}. Tell the user briefly that you won't store that.` };
+      }
+      return notSaved.length
+        ? { ok: true, saved, not_saved: notSaved, message: "Some facts were saved; tell the user briefly which ones you won't store." }
+        : { ok: true, saved };
     }
     if (name === "forget_fact") {
       const key = z.object({ key: z.string().min(1).max(64) }).safeParse(args);

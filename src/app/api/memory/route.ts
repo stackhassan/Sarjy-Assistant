@@ -6,7 +6,8 @@ export async function GET(request: Request) {
   const store = memoryFromRequest(request);
   if (!store) return Response.json({ facts: [], available: false });
   try {
-    return Response.json({ facts: await store.list(), available: true });
+    // Personal data: never cached by the browser or anything in between.
+    return Response.json({ facts: await store.list(), available: true }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (err) {
     if (err instanceof MemoryError) return Response.json({ facts: [], available: false }, { status: 503 });
     throw err;
