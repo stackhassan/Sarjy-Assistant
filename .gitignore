@@ -47,3 +47,6 @@ next-env.d.ts
 # local tooling
 /.claude/launch.json
 /docs/evals/*-subset.md
+
+# local Supabase snippets (contain deployment-specific values)
+/supabase/local/

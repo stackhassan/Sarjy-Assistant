@@ -552,7 +552,7 @@ describe("memory end to end", () => {
 
     const { chatBodies } = install({ replies: [{ text: "Your favorite color is teal." }] });
     await memoryTurn("What's my favorite color?", store);
-    expect(chatBodies[0].messages[0].content).toMatch(/<user_facts>\n- favorite color: teal\n<\/user_facts>/);
+    expect(chatBodies[0].messages[0].content).toMatch(/<user_facts>\n- favorite color = "teal"\n<\/user_facts>/);
   });
 
   it("blocks memory poisoning and doesn't save it", async () => {
@@ -593,6 +593,19 @@ describe("memory end to end", () => {
     install({ replies: [{ tool: { name: "get_weather", args: { location: "Lahore" } } }, { text: "It's twenty-six degrees at home." }] });
     const { of } = await memoryTurn("What's the weather at home?", store);
     expect(of("tool_result")[0].ok).toBe(true);
+  });
+
+  it("a memory tool call doesn't make L3 treat ordinary numbers as ungrounded weather (round-5 F4)", async () => {
+    const store = new FakeStore();
+    store.facts = [{ key: "birth_year", value: "1990", category: "personal" }];
+    install({
+      replies: [
+        { tool: { name: "remember_fact", args: { key: "cat_name", value: "Tom", category: "personal" } } },
+        { text: "Noted, Tom! You're turning thirty-six this year." },
+      ],
+    });
+    const { spoken } = await memoryTurn("Remember my cat is called Tom. Also, how old am I turning this year?", store);
+    expect(spoken).toBe("Noted, Tom! You're turning thirty-six this year.");
   });
 
   it("repeating the user's own long fact back isn't treated as a prompt leak", async () => {

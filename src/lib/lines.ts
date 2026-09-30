@@ -10,6 +10,8 @@ export const APP_LINES = {
   reprompt2: "I'm having trouble hearing you. You can also type your message below.",
   /** Said once when the voice has to switch to the browser's, so the change isn't a surprise. */
   voiceChange: "Quick heads-up, my voice might sound a bit different for a moment.",
+  /** The client is sending turns faster than the per-client limit. */
+  slowDown: "You're going a little fast for me. Give me a few seconds and try again.",
   /** The server couldn't be reached at all. */
   unreachable: "Sorry, I couldn't reach my brain just now. Could you try again in a moment?",
 } as const;

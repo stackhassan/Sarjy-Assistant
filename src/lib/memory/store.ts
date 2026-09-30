@@ -56,7 +56,16 @@ export function supabaseStore(accessToken: string): MemoryStore | null {
     },
     async upsert(fact) {
       down();
-      const { error } = await facts().upsert(fact, { onConflict: "user_id,key" });
+      // Clients can't write facts directly (migration 0002): only this server, holding the
+      // write secret, can call the function, and it still writes as the token's user.
+      if (!e.MEMORY_WRITE_SECRET) throw fail("write", "MEMORY_WRITE_SECRET is not configured");
+      const { error } = await db.rpc("sarjy_remember_fact", {
+        p_secret: e.MEMORY_WRITE_SECRET,
+        p_key: fact.key,
+        p_value: fact.value,
+        p_category: fact.category,
+        p_source: fact.source_turn ?? null,
+      });
       if (error) throw fail("write", error.message);
       cache.delete(cacheKey);
     },

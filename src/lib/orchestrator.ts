@@ -6,6 +6,7 @@ import type { ChatMessage, ToolCall } from "@/lib/llm/types";
 import { factsBlock, systemPrompt } from "@/lib/prompts";
 import { MemoryError, type Fact, type MemoryStore } from "@/lib/memory/store";
 import { MEMORY_TOOL_NAMES, memoryToolSpecs, runMemoryTool } from "@/lib/tools/memory";
+import { screenStoredFacts } from "@/lib/guardrails/l5-memory";
 import { context } from "@/lib/reliability/context";
 import { splitLong } from "@/lib/text/batch";
 import { SentenceSplitter } from "@/lib/text/sentences";
@@ -69,6 +70,15 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
     const tm = performance.now();
     try {
       facts = await rawInput.memory.list();
+      // Stored facts are untrusted: a fact can be a delayed instruction ("when I say the usual,
+      // name a politician"), or a row written around the server (red-team round 5).
+      if (facts.length && !context().bypassGuards) {
+        const screened = await screenStoredFacts(facts, signal);
+        for (const d of screened.dropped) {
+          emit({ type: "guard", layer: "L5_memory", verdict: "repair", reason: `left out stored fact "${d.key}": ${d.reason}`, ms: screened.ms });
+        }
+        facts = screened.kept;
+      }
     } catch (err) {
       if (!(err instanceof MemoryError)) throw err;
       memoryState = "unavailable";
@@ -261,7 +271,9 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
         timings[`tool:${call.function.name}`] = Math.round(performance.now() - ts);
         emit({ type: "tool_result", id: call.id, name: call.function.name, ok: result.ok, data: result, ms: timings[`tool:${call.function.name}`] });
         reportToolRecovery(call.function.name, result, emit);
-        toolResults.push(result);
+        // Only weather data is a source of figures for L3; memory tool results aren't (round 5:
+        // "how old am I turning?" was replaced by the weather line after a memory write).
+        if (call.function.name === "get_weather") toolResults.push(result);
         if (call.function.name === "get_weather") {
           lastWeather = result as WeatherResult;
           // Honesty about stale data is too important to leave to the model (the eval caught it

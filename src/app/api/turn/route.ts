@@ -5,6 +5,7 @@ import { redact } from "@/lib/redact";
 import { memoryFromRequest } from "@/lib/memory/auth";
 import { runTurn } from "@/lib/orchestrator";
 import { chaosFromRequest, withContext } from "@/lib/reliability/context";
+import { clientKey, rateLimit } from "@/lib/reliability/rateLimit";
 
 export const maxDuration = 30;
 
@@ -20,6 +21,10 @@ const body = z.object({
 
 /** Runs one turn and streams TurnEvents back as Server-Sent Events. */
 export async function POST(request: Request) {
+  const limited = rateLimit(`turn:${clientKey(request)}`, 30, 60_000);
+  if (!limited.ok) {
+    return Response.json({ error: "Too many requests" }, { status: 429, headers: { "Retry-After": String(limited.retryAfterS) } });
+  }
   const parsed = body.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: parsed.error.message }, { status: 400 });
 

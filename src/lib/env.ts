@@ -9,6 +9,8 @@ const schema = z.object({
   /** Backup providers, all OpenAI-compatible and optional. */
   SAMBANOVA_API_KEY: optional(z.string()),
   MISTRAL_API_KEY: optional(z.string()),
+  /** Server-only secret the database requires for memory writes (migration 0002). */
+  MEMORY_WRITE_SECRET: optional(z.string().min(32)),
   /** Signs screened sentences for /api/tts. Derived from GROQ_API_KEY if unset. */
   TTS_SIGNING_SECRET: optional(z.string().min(16)),
   NEXT_PUBLIC_SUPABASE_URL: optional(z.string().url()),

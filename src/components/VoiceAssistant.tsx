@@ -142,6 +142,11 @@ export function VoiceAssistant() {
         body: JSON.stringify({ text, history, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
         signal: ac.signal,
       });
+      if (res.status === 429) {
+        setNotice(APP_LINES.slowDown);
+        say("slowDown");
+        return;
+      }
       if (!res.ok) throw new Error(`Server error ${res.status}`);
 
       for await (const e of readEvents(res)) {
