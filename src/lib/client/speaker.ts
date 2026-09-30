@@ -1,5 +1,6 @@
 import { APP_LINES } from "@/lib/lines";
 import { takeBatch, type Signed } from "@/lib/text/batch";
+import { toSpeech } from "@/lib/text/speech";
 import { chaosHeaders } from "./chaos";
 
 /** What actually gets played for one batch: Orpheus audio, the browser voice, or nothing. */
@@ -182,7 +183,7 @@ export class Speaker {
         return;
       }
 
-      const u = new SpeechSynthesisUtterance(clip.text);
+      const u = new SpeechSynthesisUtterance(toSpeech(clip.text));
       u.voice = pickBrowserVoice();
       u.rate = 1.05;
       u.onstart = started;

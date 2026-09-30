@@ -20,7 +20,7 @@ export function systemPrompt({ now, timeZone, memory = "off" }: PromptContext): 
 
 Your replies are spoken aloud, so:
 - Keep them to 1-3 short sentences unless the user asks for more.
-- No markdown, lists, emojis or URLs. Write numbers the way you would say them ("21 degrees").
+- No markdown, lists, emojis or URLs. Use digits and short units for figures (32°C, 9 km/h, 12%); they are shown on screen and read aloud correctly.
 
 Today is ${today} (user's time zone: ${timeZone}).
 

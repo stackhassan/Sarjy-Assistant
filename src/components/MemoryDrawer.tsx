@@ -40,17 +40,18 @@ export function MemoryDrawer({ refreshKey }: { refreshKey: number }) {
   };
 
   return (
-    <div className="fixed top-4 right-4 z-10 lg:right-[396px]">
+    <div className="relative">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="rounded-full bg-white/5 px-3 py-1.5 text-xs text-slate-300 ring-1 ring-white/10 hover:bg-white/10"
+        className={`rounded-full px-3 py-1.5 text-xs whitespace-nowrap ring-1 transition ${open ? "bg-white/10 text-slate-100 ring-white/20" : "text-slate-300 ring-white/10 hover:bg-white/5"}`}
         aria-expanded={open}
       >
-        Memory{available ? ` · ${facts.length}` : " · off"}
+        Memory{available ? (facts.length ? ` · ${facts.length}` : "") : " · off"}
       </button>
       {open && (
-        <div className="mt-2 w-72 rounded-xl bg-slate-900/95 p-3 text-sm shadow-xl ring-1 ring-white/10">
+        <div className="absolute right-0 z-30 mt-2 w-72 rounded-xl bg-slate-900/95 p-3 text-sm shadow-xl ring-1 ring-white/10 backdrop-blur">
+          <p className="mb-2 text-xs font-medium tracking-wide text-slate-400 uppercase">What I remember</p>
           {!available && <p className="text-slate-400">Memory is unavailable right now.</p>}
           {available && facts.length === 0 && (
             <p className="text-slate-400">Nothing yet. Tell Sarjy something like “my favourite colour is teal”.</p>

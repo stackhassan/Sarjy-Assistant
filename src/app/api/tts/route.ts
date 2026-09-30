@@ -6,6 +6,7 @@ import { retryAfterSeconds } from "@/lib/tts/retryAfter";
 import { verifySentence } from "@/lib/tts/sign";
 import { chaosFromRequest } from "@/lib/reliability/context";
 import { APP_LINES, isAppLineId } from "@/lib/lines";
+import { toSpeech } from "@/lib/text/speech";
 
 export const maxDuration = 15;
 
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
     res = await fetch("https://api.groq.com/openai/v1/audio/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${env().GROQ_API_KEY}` },
-      body: JSON.stringify({ model: MODELS.tts, voice: TTS_VOICE, input, response_format: "wav" }),
+      body: JSON.stringify({ model: MODELS.tts, voice: TTS_VOICE, input: toSpeech(input), response_format: "wav" }),
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(TIMEOUT_MS)]),
     });
   } catch {
