@@ -1,7 +1,8 @@
 /** Orpheus accepts at most 200 characters per request. */
 export const TTS_MAX_CHARS = 200;
 
-export type Signed = { text: string; sig?: string };
+/** Text to speak: a server-signed sentence, or a fixed app line (by id). */
+export type Signed = { text: string; sig?: string; line?: string };
 
 /**
  * Takes as many queued sentences as fit in one TTS request, preserving order.
@@ -12,6 +13,12 @@ export function takeBatch<T extends Signed>(queue: T[], max = TTS_MAX_CHARS): T[
   const batch: T[] = [];
   let len = 0;
   for (const s of queue) {
+    // App lines are voiced by id, so they always go in a request of their own.
+    if (s.line || batch[0]?.line) {
+      if (batch.length) break;
+      batch.push(s);
+      break;
+    }
     const added = (batch.length ? 1 : 0) + s.text.length;
     if (batch.length && len + added > max) break;
     batch.push(s);

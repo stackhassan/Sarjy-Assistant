@@ -5,12 +5,15 @@ import { TTS_MAX_CHARS } from "@/lib/text/batch";
 import { retryAfterSeconds } from "@/lib/tts/retryAfter";
 import { verifySentence } from "@/lib/tts/sign";
 import { chaosFromRequest } from "@/lib/reliability/context";
+import { APP_LINES, isAppLineId } from "@/lib/lines";
 
 export const maxDuration = 15;
 
-const body = z.object({
-  sentences: z.array(z.object({ text: z.string().min(1), sig: z.string().min(1) })).min(1).max(10),
-});
+const body = z.union([
+  z.object({ sentences: z.array(z.object({ text: z.string().min(1), sig: z.string().min(1) })).min(1).max(10) }),
+  /** A fixed app line by id: the text is the server's own, so no signature is needed. */
+  z.object({ line: z.string().refine(isAppLineId) }),
+]);
 
 const TIMEOUT_MS = 6000;
 
@@ -22,11 +25,16 @@ export async function POST(request: Request) {
   const parsed = body.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Invalid request" }, { status: 400 });
 
-  const { sentences } = parsed.data;
-  if (!sentences.every((s) => verifySentence(s.text, s.sig))) {
-    return Response.json({ error: "Unsigned text" }, { status: 403 });
+  let input: string;
+  if ("line" in parsed.data) {
+    input = APP_LINES[parsed.data.line as keyof typeof APP_LINES];
+  } else {
+    const { sentences } = parsed.data;
+    if (!sentences.every((s) => verifySentence(s.text, s.sig))) {
+      return Response.json({ error: "Unsigned text" }, { status: 403 });
+    }
+    input = sentences.map((s) => s.text).join(" ");
   }
-  const input = sentences.map((s) => s.text).join(" ");
   if (input.length > TTS_MAX_CHARS) return Response.json({ error: "Batch too long" }, { status: 413 });
 
   if (chaosFromRequest(request).has("tts_down")) {

@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Recorder } from "@/lib/client/recorder";
 import { chaosFlags, chaosHeaders } from "@/lib/client/chaos";
+import { ThinkingEarcon } from "@/lib/client/earcon";
 import { Speaker, type VoiceSource } from "@/lib/client/speaker";
+import { APP_LINES, type AppLineId } from "@/lib/lines";
 import { demoMode } from "@/lib/guardrails/policy";
 import { TTS_VOICE } from "@/lib/llm/models";
 import { readEvents } from "@/lib/client/sse";
@@ -40,6 +42,10 @@ export function VoiceAssistant() {
   const inflight = useRef<AbortController | null>(null);
   const turnsRef = useRef<Turn[]>([]);
   const currentTurn = useRef<string | null>(null);
+  const earcon = useRef(new ThinkingEarcon());
+  /** Consecutive "didn't catch that" turns, for escalating reprompts. */
+  const misses = useRef(0);
+  const inputRef = useRef<HTMLInputElement>(null);
   // Read from the URL on the client only; the server render has no flags.
   const chaosKey = useSyncExternalStore(noopSubscribe, () => chaosFlags().join(","), () => "");
   const chaos = chaosKey ? chaosKey.split(",") : [];
@@ -51,10 +57,14 @@ export function VoiceAssistant() {
   useEffect(() => {
     recorder.current = new Recorder();
     speaker.current = new Speaker({
-      onStart: () => setStatus("speaking"),
+      onStart: () => {
+        earcon.current.stop();
+        setStatus("speaking");
+      },
       onIdle: () => setStatus((s) => (s === "speaking" ? "idle" : s)),
       onVoice: (source, reason) => {
         setVoice({ source, reason });
+        if (source === "none") setNotice("Voice isn't available right now, so I'll show my replies here. Try again later for voice.");
         const id = currentTurn.current;
         if (source === "browser" && reason && id) {
           const e: TurnEvent = { type: "recovery", stage: "tts", action: "browser voice", detail: reason };
@@ -62,8 +72,31 @@ export function VoiceAssistant() {
         }
       },
     });
-    return () => speaker.current?.cancel();
+    const thinking = earcon.current;
+    return () => {
+      speaker.current?.cancel();
+      thinking.stop();
+    };
   }, []);
+
+  /** Say a fixed app line in Sarjy's normal voice. */
+  const say = (line: AppLineId) => {
+    speaker.current?.beginTurn();
+    speaker.current?.enqueue({ text: APP_LINES[line], line });
+  };
+
+  /**
+   * Didn't catch that: 1st time, ask again briefly; 2nd time in a row, add help and offer
+   * typing (Google's conversation-design pattern for no-match / no-input).
+   */
+  const missed = () => {
+    misses.current += 1;
+    const line = misses.current === 1 ? "reprompt1" : "reprompt2";
+    setNotice(APP_LINES[line]);
+    say(line);
+    if (misses.current >= 2) inputRef.current?.focus();
+    setStatus("idle");
+  };
 
   const patchTurn = (id: string, fn: (t: Turn) => Turn) =>
     setTurns((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
@@ -72,6 +105,7 @@ export function VoiceAssistant() {
   const interrupt = () => {
     inflight.current?.abort();
     speaker.current?.cancel();
+    earcon.current.stop();
   };
 
   const runTurn = useCallback(async (text: string, startedAt: number, sttMs?: number, clientEvents: TurnEvent[] = []) => {
@@ -87,6 +121,9 @@ export function VoiceAssistant() {
       ]);
     setTurns((ts) => [...ts, { id, user: text, assistant: "", events: clientEvents, sttMs }]);
     setStatus("thinking");
+    speaker.current?.beginTurn();
+    // Silence reads as "it broke": if nothing is heard within ~2 s, play a soft thinking chime.
+    earcon.current.armAfter(2000);
 
     speaker.current?.onNextAudioStart(() =>
       patchTurn(id, (t) => ({ ...t, ttfaMs: Math.round(performance.now() - startedAt) })),
@@ -124,36 +161,31 @@ export function VoiceAssistant() {
     } catch (err) {
       if (ac.signal.aborted) return;
       setNotice((err as Error).message);
-      speaker.current?.enqueue({ text: "Sorry, I couldn't reach my brain just now." });
+      say("unreachable");
     } finally {
       if (inflight.current === ac) inflight.current = null;
+      if (!speaker.current?.speaking) earcon.current.stop();
       setStatus((s) => (s === "thinking" && !speaker.current?.speaking ? "idle" : s));
     }
   }, []);
 
   const onOrb = async () => {
     setNotice(null);
+    earcon.current.prime(); // user gesture: lets the browser play the chime later
     const rec = recorder.current!;
     if (rec.recording) {
       const stoppedAt = performance.now();
       setStatus("transcribing");
       try {
         const clip = await rec.stop();
-        if (clip.size < 2000) {
-          setNotice("That was a bit short. Tap, speak, then tap again to send.");
-          setStatus("idle");
-          return;
-        }
+        if (clip.size < 2000) return missed();
         const form = new FormData();
         form.append("audio", clip);
         const res = await fetch("/api/stt", { method: "POST", body: form, headers: chaosHeaders() });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Transcription failed");
-        if (!data.text) {
-          setNotice("I didn't catch that. Try again?");
-          setStatus("idle");
-          return;
-        }
+        if (!data.text) return missed();
+        misses.current = 0;
         const sttEvents: TurnEvent[] = (data.failovers ?? []).map((detail: string) => ({
           type: "recovery",
           stage: "stt",
@@ -162,10 +194,8 @@ export function VoiceAssistant() {
         }));
         await runTurn(data.text, stoppedAt, data.ms, sttEvents);
       } catch {
-        // Both STT models failed: say so out loud, and offer the text box.
-        setNotice("I couldn't make out that audio. You can try again or type below.");
-        speaker.current?.enqueue({ text: "Sorry, I couldn't hear that properly. Could you try again, or type it instead?" });
-        setStatus("idle");
+        // Both STT models failed: treat it like a miss (ask again, then offer typing).
+        missed();
       }
       return;
     }
@@ -185,6 +215,8 @@ export function VoiceAssistant() {
     const text = draft.trim();
     if (!text) return;
     interrupt();
+    earcon.current.prime();
+    misses.current = 0;
     setDraft("");
     runTurn(text, performance.now());
   };
@@ -203,7 +235,12 @@ export function VoiceAssistant() {
             </p>
           )}
           <p className="mt-1 text-xs text-slate-500" title={voice.reason}>
-            Voice: {voice.source === "orpheus" ? `Orpheus · ${TTS_VOICE[0].toUpperCase()}${TTS_VOICE.slice(1)}` : `browser fallback${voice.reason ? ` (${voice.reason})` : ""}`}
+            Voice:{" "}
+            {voice.source === "orpheus"
+              ? `Orpheus · ${TTS_VOICE[0].toUpperCase()}${TTS_VOICE.slice(1)}`
+              : voice.source === "none"
+                ? "unavailable (text only)"
+                : `browser fallback${DEMO && voice.reason ? ` (${voice.reason})` : ""}`}
           </p>
         </header>
 
@@ -226,6 +263,7 @@ export function VoiceAssistant() {
 
         <form onSubmit={onSubmit} className="sticky bottom-4 mt-6 flex w-full max-w-xl gap-2">
           <input
+            ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Or type a message…"

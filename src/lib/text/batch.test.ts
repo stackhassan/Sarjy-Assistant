@@ -28,3 +28,11 @@ describe("splitLong", () => {
     expect(parts.join(" ")).toBe(text);
   });
 });
+
+describe("takeBatch with app lines", () => {
+  it("never merges an app line with other text", () => {
+    const q = [{ text: "a", line: "reprompt1" }, { text: "b", sig: "x" }, { text: "c", sig: "y" }];
+    expect(takeBatch(q).map((s) => s.text)).toEqual(["a"]);
+    expect(takeBatch(q).map((s) => s.text)).toEqual(["b", "c"]);
+  });
+});
