@@ -186,6 +186,7 @@ These are outside the take-home's scope, but they're the plan:
 - **Per-user and per-IP rate limits,** so one client can't exhaust shared guard capacity (round 3, R3-8).
 - **Monitoring and alerts** on degraded-mode rate, block rate and spikes; audit logs of blocked turns; human review of samples.
 - **Evals gating every deploy** (red-team and benign suites must pass), plus scheduled red-team runs and staged rollouts.
+- **CAPTCHA on anonymous sign-ins** (Turnstile) and a scheduled job deleting inactive anonymous users; for the demo, Supabase's per-IP sign-in rate limit and the 100-fact cap bound the damage.
 - **Accounts, abuse handling, a data-retention and PII policy,** and a review of the medical and self-harm replies by someone qualified.
 
 ### Known limitations

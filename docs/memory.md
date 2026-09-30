@@ -52,5 +52,5 @@ Isolation held on every test: cross-user reads, updates, deletes and inserts, fo
 
 1. Run `supabase/migrations/0001_facts.sql`, then `0002_memory_writes_via_server.sql`, then your local `supabase/local/set_write_secret.sql` in the Supabase SQL editor. Set `MEMORY_WRITE_SECRET` in the server env (the hash in the local snippet must match it).
 2. Enable **Authentication → Anonymous sign-ins**.
-3. Recommended for production: enable CAPTCHA (Turnstile) for sign-ins, so scripts can't mass-create anonymous users.
+3. Keep Supabase's built-in rate limit on anonymous sign-ins (Authentication → Rate Limits). CAPTCHA is **off** for the demo: enabling it requires a CAPTCHA widget in the app (Supabase rejects sign-ins without a token), which isn't worth the setup here. Junk accounts can only hold 100 screened facts each and see only their own data; usage is capped by the per-client rate limit on /api/turn.
 4. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` (the publishable key is public by design; RLS is what protects the data).
