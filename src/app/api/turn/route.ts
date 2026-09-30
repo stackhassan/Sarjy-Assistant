@@ -1,5 +1,7 @@
 import { z } from "zod";
 import type { TurnEvent } from "@/lib/events";
+import { demoMode } from "@/lib/guardrails/policy";
+import { redact } from "@/lib/redact";
 import { runTurn } from "@/lib/orchestrator";
 import { chaosFromRequest, withContext } from "@/lib/reliability/context";
 
@@ -25,8 +27,11 @@ export async function POST(request: Request) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      const emit = (e: TurnEvent) => {
+      const demo = demoMode();
+      const emit = (raw: TurnEvent) => {
         if (request.signal.aborted) return;
+        const e = demo ? raw : redact(raw);
+        if (!e) return;
         controller.enqueue(encoder.encode(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`));
       };
       try {

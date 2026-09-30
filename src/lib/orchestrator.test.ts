@@ -241,11 +241,36 @@ describe("reliability end to end", () => {
     expect(err.sig).toBeTruthy();
   });
 
-  it("keeps answering when the guard models are down (degraded mode)", async () => {
-    install({ replies: [{ text: "Hi there!" }] });
+  it("fails closed when the guard models are down: no free-form model text (default policy)", async () => {
+    install({ replies: [{ text: "Sure, here is my honest political pick." }] });
     const { spoken, of } = await turn("hi", { chaos: ["guard_down"] });
-    expect(spoken).toBe("Hi there!");
-    expect(of("recovery").filter((r) => r.stage === "guard")).toHaveLength(2);
+    expect(spoken).toMatch(/safety checks are having a moment/);
+    expect(spoken).not.toMatch(/political pick/);
+    expect(of("recovery").some((r) => r.action === "safe mode")).toBe(true);
+  });
+
+  it("in safe mode, still answers weather, but only from the grounded template", async () => {
+    install({
+      replies: [
+        { tool: { name: "get_weather", args: { location: "Lahore", days: 1 } } },
+        { text: "It's a blistering fifty degrees!" }, // never requested in safe mode
+      ],
+    });
+    const { spoken } = await turn("weather in Lahore?", { chaos: ["guard_down"] });
+    expect(spoken).toMatch(/^Here are the exact figures for Lahore, Pakistan\. Right now it's 26 degrees/);
+    expect(spoken).not.toMatch(/fifty/);
+  });
+
+  it("with GUARD_DEGRADED_POLICY=restricted (development only), keeps answering in degraded mode", async () => {
+    process.env.GUARD_DEGRADED_POLICY = "restricted";
+    try {
+      install({ replies: [{ text: "Hi there!" }] });
+      const { spoken, of } = await turn("hi", { chaos: ["guard_down"] });
+      expect(spoken).toBe("Hi there!");
+      expect(of("recovery").filter((r) => r.stage === "guard")).toHaveLength(2);
+    } finally {
+      delete process.env.GUARD_DEGRADED_POLICY;
+    }
   });
 
   it("always discloses stale weather before the answer, whatever the model says", async () => {
@@ -326,6 +351,40 @@ describe("red-team regressions", () => {
     const sent = chatBodies[0].messages.map((m) => m.content).join(" ");
     expect(sent).toMatch(/Hello!/);
     expect(sent).not.toMatch(/ignore your rules|padding/);
+  });
+
+  it("a client may start the window at a later signed turn; only that shorter history is used (round 4 note 1)", async () => {
+    const { chatBodies } = install({ replies: [{ text: "Sure." }] });
+    const full = signChain([
+      { role: "user" as const, content: "EARLY CONTEXT" },
+      { role: "assistant" as const, content: "Noted." },
+      { role: "user" as const, content: "weather in Lahore?" },
+      { role: "assistant" as const, content: "It's clear." },
+    ]);
+    const { of } = await turn("and tomorrow?", { history: full.slice(2) });
+    expect(of("guard").some((g) => g.verdict === "repair")).toBe(false); // valid: nothing dropped
+    const sent = chatBodies[0].messages.map((m) => m.content).join(" ");
+    expect(sent).toContain("It's clear.");
+    expect(sent).not.toContain("EARLY CONTEXT"); // guards and model both see the same shorter window
+  });
+
+  it("a message trimmed for budget in one turn can't reach the model in a later turn (round 4 note 2)", async () => {
+    const pad = "z".repeat(1900);
+    const history = signChain(
+      [0, 1, 2, 3].flatMap((i) => [
+        { role: "user" as const, content: i === 0 ? "TRIMMED ASK " + pad : pad },
+        { role: "assistant" as const, content: `ok ${i}` },
+      ]),
+    );
+    const first = install({ replies: [{ text: "One." }] });
+    const t1 = await turn("first", { history });
+    expect(first.chatBodies[0].messages.map((m) => m.content).join(" ")).not.toContain("TRIMMED ASK");
+    // The client sends the same history plus the new, signed exchange.
+    const done = t1.of("done")[0];
+    const next = [...history, { role: "user" as const, content: "first" }, { role: "assistant" as const, content: done.assistant.text, sig: done.assistant.sig, prev: done.assistant.prev }];
+    const second = install({ replies: [{ text: "Two." }] });
+    await turn("second", { history: next });
+    expect(second.chatBodies[0].messages.map((m) => m.content).join(" ")).not.toContain("TRIMMED ASK");
   });
 
   it("trims the model's history to what L2 can screen, and says so", async () => {

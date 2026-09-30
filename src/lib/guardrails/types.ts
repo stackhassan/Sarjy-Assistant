@@ -26,6 +26,9 @@ export type OutputContext = {
    * `degraded` (input screened blind) makes sensitive sentences fail closed.
    */
   risk: { reasons: string[]; degraded?: boolean };
+  /** Sentences already approved this turn, and earlier replies, for whole-text leak tripwires. */
+  spokenSoFar?: string;
+  priorReplies?: string;
   signal?: AbortSignal;
 };
 

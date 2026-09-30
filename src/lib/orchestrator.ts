@@ -11,6 +11,7 @@ import { runTool, toolSpecs } from "@/lib/tools";
 import { summarizeWeather, type WeatherResult } from "@/lib/tools/weather";
 import { signAssistantTurn, signSentence, verifyHistory } from "@/lib/tts/sign";
 import { fitScreeningBudget } from "@/lib/guardrails/l2-topic";
+import { degradedPolicy } from "@/lib/guardrails/policy";
 
 export type TurnInput = {
   text: string;
@@ -26,6 +27,8 @@ const MAX_STREAM_ATTEMPTS = 2;
 const FALLBACK_LINE = "Sorry, I'm having trouble thinking right now. Could you try again in a moment?";
 const LOST_TRAIN_LINE = "Sorry, I lost my train of thought there. Could you ask me that again?";
 const EMPTY_LINE = "Sorry, I didn't quite get that. Could you say it another way?";
+const SAFE_MODE_LINE =
+  "Sorry, my safety checks are having a moment, so I'm keeping things simple. I can still check the weather for you, or try me again shortly.";
 const NO_TOOL_WEATHER_LINE =
   "Let me not guess at that. I'd need to check the live forecast, so which city should I look up?";
 
@@ -86,6 +89,9 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
     emit({ type: "guard", layer: "L2_topic", verdict: "repair", reason: `trimmed ${trimmed} old message(s) beyond the screening budget`, ms: 0 });
   }
 
+  // Fail-closed safe mode: set when an input guard couldn't run (see guardrails/policy.ts).
+  let safeMode = false;
+
   // ---- input guards (L1 + L2), started in parallel with the LLM ----
   const gate: Promise<InputScreen | null> = bypassGuards
     ? Promise.resolve(null)
@@ -97,6 +103,10 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
           }
           mark("inputGuards");
           if (screen.blocked) takeOver(screen.blocked.replacement ?? "Let's talk about something else.");
+          else if (screen.risk.degraded && degradedPolicy() === "fail_closed") {
+            safeMode = true;
+            emit({ type: "recovery", stage: "guard", action: "safe mode", detail: "input guards unavailable: no free-form model output this turn" });
+          }
           return screen;
         },
         (err) => {
@@ -114,7 +124,7 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
     firstReadyAt ??= performance.now();
     speechChain = speechChain.then(async () => {
       const screen = await gate;
-      if (stopped) return;
+      if (stopped || safeMode) return; // safe mode: the model's own words are never spoken
       const sentence = sanitizeForSpeech(raw);
       if (!sentence) return;
 
@@ -130,6 +140,10 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
           userText: input.text,
           systemPrompt: prompt,
           risk: screen?.risk ?? { reasons: [] },
+          // Cheap leak tripwires also run over the whole turn and earlier replies, so a
+          // leak spread one piece per sentence (or per reply) is seen whole (round 4 review).
+          spokenSoFar: spoken.join(" "),
+          priorReplies: input.history.filter((m) => m.role === "assistant").map((m) => m.content).join(" "),
           signal,
         });
         emitGuard(l4);
@@ -229,6 +243,8 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
         // Tool output is data for the model, never instructions.
         messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
       }
+      // Safe mode speaks only the template built from tool data, so skip the model's wording round.
+      if (safeMode) break;
     }
   } catch (err) {
     if (!stopped && !signal.aborted) {
@@ -248,6 +264,9 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
   if (firstReadyAt !== null && timings.firstSentence !== undefined) {
     // How long the first finished sentence waited on guards before it could be spoken.
     timings.guardWait = Math.max(0, Math.round(t0 + timings.firstSentence - firstReadyAt));
+  }
+  if (safeMode && !stopped && !signal.aborted) {
+    emitSentence(lastWeather ? summarizeWeather(lastWeather, input.text) : SAFE_MODE_LINE);
   }
   // Never end a turn in silence (the red-team saw an empty completion under load).
   if (spoken.length === 0 && !signal.aborted) {

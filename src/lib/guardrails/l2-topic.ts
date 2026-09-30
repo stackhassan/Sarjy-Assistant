@@ -101,6 +101,8 @@ const CONTEXT_CHUNK_CHARS = 2400;
  * and enforced the other way round: the *model's* history is trimmed to what fits.
  */
 export const MAX_CHUNKS = 2;
+/** Characters of the previous chunk repeated at the start of the next. */
+const CHUNK_OVERLAP_CHARS = 400;
 
 /**
  * Splits earlier user turns into chunks for classification. Every character is
@@ -123,7 +125,9 @@ export function contextChunks(earlier: string[], size = CONTEXT_CHUNK_CHARS): st
     }
   }
   if (cur) chunks.push(cur);
-  return chunks;
+  // Each chunk after the first repeats the tail of the one before, so a request split
+  // across a boundary is still seen whole by one classifier call (round 4 review).
+  return chunks.map((c, i) => (i === 0 ? c : `…${chunks[i - 1].slice(-CHUNK_OVERLAP_CHARS)}\n${c}`));
 }
 
 export async function screenTopic(ctx: InputContext): Promise<L2Result> {

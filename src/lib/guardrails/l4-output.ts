@@ -260,16 +260,20 @@ export async function screenOutput(ctx: OutputContext): Promise<GuardResult> {
     ...r,
   });
 
-  if (containsCanary(ctx.sentence)) {
+  // Whole-text view: this sentence plus what was already said this turn (and, for the
+  // canary and letter-shift checks, earlier replies too). Catches leaks spread thin.
+  const turnText = `${ctx.spokenSoFar ?? ""} ${ctx.sentence}`.trim();
+  const convoText = `${ctx.priorReplies ?? ""} ${turnText}`.trim();
+  if (containsCanary(ctx.sentence) || containsCanary(convoText)) {
     return done({ verdict: "block", reason: "contains the system-prompt canary", replacement: CLOSING_LINE });
   }
-  if (skipGramLeak(ctx.sentence, ctx.systemPrompt)) {
+  if (skipGramLeak(ctx.sentence, ctx.systemPrompt) || skipGramLeak(turnText, ctx.systemPrompt)) {
     return done({ verdict: "block", reason: "follows the system prompt's word order (skip-gram)", replacement: CLOSING_LINE });
   }
-  if (shiftedLeak(ctx.sentence, ctx.systemPrompt)) {
+  if (shiftedLeak(ctx.sentence, ctx.systemPrompt) || shiftedLeak(turnText, ctx.systemPrompt)) {
     return done({ verdict: "block", reason: "matches the system prompt under a letter shift (cipher)", replacement: CLOSING_LINE });
   }
-  if (leaksSystemPrompt(ctx.sentence, ctx.systemPrompt)) {
+  if (leaksSystemPrompt(ctx.sentence, ctx.systemPrompt) || leaksSystemPrompt(turnText, ctx.systemPrompt)) {
     return done({ verdict: "block", reason: "repeats system prompt text", replacement: CLOSING_LINE });
   }
   const secrets = findSecrets(ctx.sentence);

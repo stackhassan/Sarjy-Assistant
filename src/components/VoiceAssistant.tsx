@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { Recorder } from "@/lib/client/recorder";
 import { chaosFlags, chaosHeaders } from "@/lib/client/chaos";
 import { Speaker, type VoiceSource } from "@/lib/client/speaker";
+import { demoMode } from "@/lib/guardrails/policy";
 import { TTS_VOICE } from "@/lib/llm/models";
 import { readEvents } from "@/lib/client/sse";
 import type { HistoryMessage, TurnEvent } from "@/lib/events";
@@ -24,6 +25,8 @@ export type Turn = {
 };
 
 const noopSubscribe = () => () => {};
+/** Build-time: the Inspector (guard internals) only exists in demo mode. */
+const DEMO = demoMode();
 
 export function VoiceAssistant() {
   const [status, setStatus] = useState<AssistantStatus>("idle");
@@ -189,11 +192,11 @@ export function VoiceAssistant() {
   const busy = status === "transcribing";
 
   return (
-    <div className="grid min-h-dvh grid-cols-1 lg:grid-cols-[1fr_380px]">
+    <div className={`grid min-h-dvh grid-cols-1 ${DEMO ? "lg:grid-cols-[1fr_380px]" : ""}`}>
       <main className="flex min-h-dvh flex-col items-center px-4 py-10">
         <header className="mb-8 text-center">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-100">Sarjy</h1>
-          <p className="text-sm text-slate-400">A voice assistant with guardrails you can watch.</p>
+          <p className="text-sm text-slate-400">{DEMO ? "A voice assistant with guardrails you can watch." : "Your friendly voice assistant."}</p>
           {chaos.length > 0 && (
             <p className="mt-2 rounded-full bg-amber-500/10 px-3 py-1 text-xs text-amber-300 ring-1 ring-amber-500/30">
               Fault injection on: {chaos.join(", ")}
@@ -239,9 +242,11 @@ export function VoiceAssistant() {
         </form>
       </main>
 
-      <div className="border-t border-white/10 bg-black/20 lg:h-dvh lg:border-t-0 lg:border-l">
-        <Inspector turns={turns} />
-      </div>
+      {DEMO && (
+        <div className="border-t border-white/10 bg-black/20 lg:h-dvh lg:border-t-0 lg:border-l">
+          <Inspector turns={turns} />
+        </div>
+      )}
     </div>
   );
 }
