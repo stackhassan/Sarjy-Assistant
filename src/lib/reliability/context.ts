@@ -16,6 +16,7 @@ export const CHAOS_FLAGS = [
   "weather_slow", // primary weather API stalls past its timeout
   "guard_down", // guard classifier models fail
   "guard_primary_down", // only the primary guard models fail (backups should take over)
+  "guard_slow", // the primary guard models hang until their timeout (a slow outage, not a fast 503)
   "stt_down", // primary speech-to-text model fails
   "tts_down", // text-to-speech fails
   "memory_down", // the memory database fails
@@ -52,7 +53,7 @@ export function chaos(flag: ChaosFlag): boolean {
  * guard bypass (the red-team used it to get medical dosing), so over HTTP these
  * are honoured only outside production or with an explicit server-side opt-in.
  */
-export const GUARD_FAULTS: ReadonlySet<ChaosFlag> = new Set(["guard_down", "guard_primary_down"]);
+export const GUARD_FAULTS: ReadonlySet<ChaosFlag> = new Set(["guard_down", "guard_primary_down", "guard_slow"]);
 
 export function guardFaultsAllowed(): boolean {
   return process.env.NODE_ENV !== "production" || process.env.CHAOS_ALLOW_GUARD_FAULTS === "1";

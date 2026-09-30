@@ -125,3 +125,56 @@ describe("one time budget for the whole backup chain (review feedback)", () => {
     expect(performance.now() - t0).toBeLessThan(1800);
   });
 });
+
+describe("hedging: a slow primary doesn't starve the backups (review follow-up)", () => {
+  const ok = (c: string) => Response.json({ choices: [{ message: { content: `{"category":"${c}","confidence":0.95}` } }] });
+  /** The primary model hangs until aborted; everything else answers quickly. */
+  function primaryHangs(primaryModel: string, answer: () => Response) {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => {
+      const { model } = JSON.parse(String(init.body));
+      calls.push(model);
+      if (model === primaryModel) {
+        return new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+      }
+      return Promise.resolve(answer());
+    });
+    return calls;
+  }
+
+  it("a hanging safeguard: the backup starts at ~700 ms and answers, well inside the budget", async () => {
+    const calls = primaryHangs("openai/gpt-oss-safeguard-20b", () => ok("allowed"));
+    const t0 = performance.now();
+    const r = await safeguardClassify("policy", "x", { timeoutMs: 1500, budgetMs: 2500 });
+    const ms = performance.now() - t0;
+    expect(r.model).toBe("gpt-oss-20b");
+    expect(ms).toBeGreaterThanOrEqual(650);
+    expect(ms).toBeLessThan(1100); // before: the backup only started after the full 1.5 s timeout
+    expect(calls).toEqual(["openai/gpt-oss-safeguard-20b", "openai/gpt-oss-20b"]);
+  });
+
+  it("a healthy primary never starts the backup (no extra quota on a normal day)", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      calls.push(JSON.parse(String(init.body)).model);
+      return ok("allowed");
+    });
+    await safeguardClassify("policy", "x", { timeoutMs: 1500 });
+    expect(calls).toEqual(["openai/gpt-oss-safeguard-20b"]);
+  });
+
+  it("the guard_slow fault exercises the same path for Prompt Guard", async () => {
+    stub({ "meta-llama/llama-prompt-guard-2-22m": () => [200, "0.01"] });
+    const t0 = performance.now();
+    const s = await withContext({ chaos: new Set(["guard_slow"] as const) }, () => promptGuardScore("hello"));
+    expect(s).toBe(0.01);
+    expect(performance.now() - t0).toBeLessThan(900);
+  });
+
+  it("if the hedged pair both fail, the other providers still get a turn within the budget", async () => {
+    process.env.GEMINI_API_KEY = "g";
+    stub({ "openai/gpt-oss-safeguard-20b": () => [503, ""], "openai/gpt-oss-20b": () => [503, ""], "gemini-flash-lite-latest": () => [200, '{"category":"allowed","confidence":0.9}'] });
+    const r = await safeguardClassify("policy", "x", { timeoutMs: 1500 });
+    expect(r.model).toBe("gemini");
+  });
+});

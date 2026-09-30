@@ -72,8 +72,8 @@ Every failure above can be triggered on purpose, for tests, the eval suite, or a
 
 - **UI:** open `/?chaos=llm_primary_down,weather_slow`. A banner shows which faults are active, and the Inspector shows each recovery.
 - **API:** send header `x-sarjy-chaos: llm_midstream_drop`.
-- **Flags:** `llm_primary_down`, `llm_all_down`, `llm_slow`, `llm_midstream_drop`, `weather_down`, `weather_all_down`, `weather_slow`, `guard_down`, `stt_down`, `tts_down`.
+- **Flags:** `llm_primary_down`, `llm_all_down`, `llm_groq_down`, `llm_slow`, `llm_midstream_drop`, `weather_down`, `weather_all_down`, `weather_slow`, `guard_down`, `guard_primary_down`, `guard_slow` (the primary guard models hang until their timeout, which exercises hedging), `stt_down`, `tts_down`, `memory_down`.
 
 Flags only affect the request that carries them, so it's safe to leave this on the public demo. The guard bypass used for baseline measurements exists only inside the eval harness, never over HTTP.
 
-**Guard-weakening faults (`guard_down`) are not honoured in production** (unless `CHAOS_ALLOW_GUARD_FAULTS=1` is set on the server). The red-team showed that taking the classifiers offline is, in effect, a guard bypass: it got medication dosing that way. In development and evals the flag still works, so degraded mode stays testable.
+**Guard-weakening faults (`guard_down`, `guard_primary_down`, `guard_slow`) are not honoured in production** (unless `CHAOS_ALLOW_GUARD_FAULTS=1` is set on the server). The red-team showed that taking the classifiers offline is, in effect, a guard bypass: it got medication dosing that way. In development and evals the flag still works, so degraded mode stays testable.

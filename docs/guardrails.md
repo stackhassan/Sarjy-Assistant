@@ -119,10 +119,19 @@ The patterns that block outright were also narrowed to be about **the assistant*
 
 Each guard classifier has backups (safeguard → gpt-oss-20b → Mistral → Gemini; Prompt Guard 86m → 22m). They were tried one after another, each with its own timeout, so a slow outage could hold the input gate or a sentence for about **10.5 s**. Each call now has one budget shared by the whole chain. A backup is started only if at least 300 ms of the budget is left:
 - **Input** (L1 and L2, run in parallel): 2.5 s.
-- **L4 per sentence:** 1.8 s.
+- **L4 per sentence:** 2.2 s.
 - **L5:** 3 s.
 
 Running out counts as "classifier unavailable", which each layer already handles (keyword fallback, degraded, fail-closed safe mode).
+
+**Hedged, so a slow primary doesn't starve the backups.** A budget alone has a catch: a primary that *hangs* (rather than failing fast) uses most of the budget before its own timeout, so the backups never get a turn and the turn goes to safe mode, although a backup was healthy. So the first backup starts *alongside* the primary if the primary hasn't answered by 700 ms (safeguard) or 500 ms (Prompt Guard), and the first good answer wins. Those delays sit above each primary's normal p95, so on a normal day the hedge never fires and costs no extra calls. If both fail, Mistral and Gemini are still tried in turn, within the budget. The `guard_slow` fault makes the primary guard models hang, to exercise this ([guard-hedge.md](evals/guard-hedge.md), 8 rounds per arm, alternated):
+
+| | Input check p50 / p95 | Answered by a backup | Input degraded | Turns in safe mode |
+|---|---|---|---|---|
+| Normal | 150 / 905 ms | 0 / 8 | 0 | 0 / 8 |
+| Primary guards hanging (`guard_slow`) | 1126 / 1470 ms | 8 / 8 | 0 | 0 / 8 |
+
+An earlier run of the same test had 3 of 8 `guard_slow` turns in safe mode, and that run didn't record why. The chat model was rate-limited at the time and failing over to gpt-oss-20b, the same model as the first guard backup, so shared rate limits are the likely cause. The eval now records the reason if it happens again. L4's budget was raised from 1.8 s to 2.2 s after its check hit the limit at p95 in both runs.
 
 ### When guards *do* cost time
 

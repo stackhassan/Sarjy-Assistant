@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { MODELS } from "@/lib/llm/models";
 import { chaos } from "@/lib/reliability/context";
+import { hedge } from "@/lib/reliability/hedge";
 
 export class ClassifierError extends Error {}
 
@@ -20,13 +21,40 @@ const MISTRAL_CHAT = "https://api.mistral.ai/v1/chat/completions";
 export const GUARD_BUDGET_MS = {
   /** L1 + L2 on the user's message (they run in parallel, each within this). */
   input: 2500,
-  /** L4's LLM check on one sentence. */
-  output: 1800,
+  /**
+   * L4's LLM check on one sentence. 1.8 s was hit at p95 under a slow primary (the backup
+   * starts at 700 ms and needs ~0.5-1.4 s), so 2.2 s. Normal days: p95 0.3-0.6 s.
+   */
+  output: 2200,
   /** L5's checks on a fact being saved or read back. */
   memory: 3000,
 } as const;
 /** Don't start a backup with less than this left: it couldn't answer in time anyway. */
 const MIN_ATTEMPT_MS = 300;
+
+/**
+ * Hedging: if the primary hasn't answered by then, the first backup starts *alongside* it
+ * and the first good answer wins. Without it, a primary that hangs (rather than failing
+ * fast) used most of the budget before its own timeout, leaving the backups no time: the
+ * turn went to safe mode although a backup was healthy. Set above each primary's normal
+ * p95 (Prompt Guard ~280 ms, safeguard ~200-400 ms), so on a normal day it rarely fires
+ * and costs no extra calls.
+ */
+export const GUARD_HEDGE_MS = { promptGuard: 500, policy: 700 } as const;
+
+/** `guard_slow` fault: the primary hangs until its timeout (or the request is cancelled). */
+async function stall(ms: number, signal?: AbortSignal): Promise<never> {
+  await new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(t);
+      resolve();
+    });
+  });
+  throw new ClassifierError("primary: timed out (chaos: guard_slow)");
+}
+
+const noSignal = new AbortController().signal;
 
 /** Tracks what's left of a budget; `timeout(n)` is n capped to the remainder, or null when spent. */
 function deadline(budgetMs: number) {
@@ -91,23 +119,26 @@ export async function promptGuardScore(text: string, signal?: AbortSignal, budge
   for (let i = 0; i < text.length; i += PROMPT_GUARD_CHUNK) chunks.push(text.slice(i, i + PROMPT_GUARD_CHUNK));
   const [primary, backup] = promptGuardEndpoints();
   const timeout = deadline(budgetMs);
+  const attempt = (ep: Endpoint, isPrimary: boolean, chunk: string) => async (sig: AbortSignal) => {
+    const ms = timeout(ep.timeoutMs);
+    if (ms === null) throw new ClassifierError(`${ep.name}: time budget (${budgetMs} ms) spent`);
+    if (isPrimary && chaos("guard_primary_down")) throw new ClassifierError(`${ep.name}: simulated outage (chaos)`);
+    if (isPrimary && chaos("guard_slow")) return stall(ms, sig);
+    const out = await chat({ ...ep, timeoutMs: ms }, { messages: [{ role: "user", content: chunk }] }, sig);
+    const s = Number.parseFloat(out);
+    if (!Number.isFinite(s)) throw new ClassifierError(`${ep.name} returned ${JSON.stringify(out)}`);
+    return s;
+  };
   const score = async (chunk: string) => {
-    let lastErr: unknown = new ClassifierError("prompt guard: time budget spent");
-    for (const ep of [primary, backup]) {
-      const ms = timeout(ep.timeoutMs);
-      if (ms === null) break;
-      try {
-        if (ep === primary && chaos("guard_primary_down")) throw new ClassifierError(`${ep.name}: simulated outage (chaos)`);
-        const out = await chat({ ...ep, timeoutMs: ms }, { messages: [{ role: "user", content: chunk }] }, signal);
-        const s = Number.parseFloat(out);
-        if (!Number.isFinite(s)) throw new ClassifierError(`${ep.name} returned ${JSON.stringify(out)}`);
-        return s;
-      } catch (err) {
-        if (!(err instanceof ClassifierError)) throw err;
-        lastErr = err;
-      }
+    try {
+      const { value } = await hedge(attempt(primary, true, chunk), attempt(backup, false, chunk), {
+        delayMs: GUARD_HEDGE_MS.promptGuard,
+        signal: signal ?? noSignal,
+      });
+      return value;
+    } catch (err) {
+      throw asClassifierError(err);
     }
-    throw lastErr;
   };
   const scores = await Promise.all(chunks.map(score));
   return Math.max(0, ...scores);
@@ -162,34 +193,60 @@ export async function safeguardClassify<T>(
   /** `timeoutMs`: the primary model's own timeout. `budgetMs`: total for primary + backups. */
   opts: { timeoutMs: number; budgetMs?: number; signal?: AbortSignal },
 ): Promise<Classified<T>> {
-  const errors: string[] = [];
   const budgetMs = opts.budgetMs ?? GUARD_BUDGET_MS.input;
   const timeout = deadline(budgetMs);
-  for (const [i, ep] of policyEndpoints().entries()) {
+  const attempt = (ep: Endpoint, i: number) => async (sig: AbortSignal): Promise<Classified<T>> => {
     const ms = timeout(i === 0 ? opts.timeoutMs : ep.timeoutMs);
-    if (ms === null) {
-      errors.push(`time budget (${budgetMs} ms) spent before ${ep.name}`);
-      break;
-    }
+    if (ms === null) throw new ClassifierError(`time budget (${budgetMs} ms) spent before ${ep.name}`);
+    if (i === 0 && chaos("guard_primary_down")) throw new ClassifierError(`${ep.name}: simulated outage (chaos)`);
+    if (i === 0 && chaos("guard_slow")) return stall(ms, sig);
+    const out = await chat(
+      { ...ep, timeoutMs: ms },
+      {
+        messages: [
+          { role: "system", content: `${policy}\n\nReply with the JSON object only.` },
+          { role: "user", content },
+        ],
+        temperature: 0,
+        max_completion_tokens: 800,
+      },
+      sig,
+    );
+    return { value: parseJsonObject<T>(out), model: ep.name };
+  };
+
+  const eps = policyEndpoints();
+  const signal = opts.signal ?? noSignal;
+  const errors: string[] = [];
+  // 1. Primary, hedged with the first backup.
+  try {
+    if (eps.length === 1) return await attempt(eps[0], 0)(signal);
+    return (await hedge(attempt(eps[0], 0), attempt(eps[1], 1), { delayMs: GUARD_HEDGE_MS.policy, signal })).value;
+  } catch (err) {
+    if (signal.aborted) throw err;
+    errors.push(asClassifierError(err).message);
+  }
+  // 2. Both failed: the other providers, one at a time, while the budget lasts.
+  for (const [i, ep] of eps.entries()) {
+    if (i < 2) continue;
     try {
-      if (i === 0 && chaos("guard_primary_down")) throw new ClassifierError(`${ep.name}: simulated outage (chaos)`);
-      const out = await chat(
-        { ...ep, timeoutMs: ms },
-        {
-          messages: [
-            { role: "system", content: `${policy}\n\nReply with the JSON object only.` },
-            { role: "user", content },
-          ],
-          temperature: 0,
-          max_completion_tokens: 800,
-        },
-        opts.signal,
-      );
-      return { value: parseJsonObject<T>(out), model: ep.name };
+      return await attempt(ep, i)(signal);
     } catch (err) {
-      if (!(err instanceof ClassifierError) || opts.signal?.aborted) throw err;
-      errors.push(err.message);
+      if (signal.aborted) throw err;
+      errors.push(asClassifierError(err).message);
+      if (/time budget/.test(errors.at(-1)!)) break;
     }
   }
   throw new ClassifierError(errors.join("; "));
+}
+
+/** hedge() rejects with an AggregateError of both attempts; flatten to one ClassifierError. */
+function asClassifierError(err: unknown): ClassifierError {
+  if (err instanceof ClassifierError) return err;
+  if (err instanceof AggregateError) {
+    const inner = err.errors.map((e) => asClassifierError(e));
+    return new ClassifierError(inner.map((e) => e.message).join("; "));
+  }
+  // Anything else (a bug, not an outage) must not be mistaken for "classifier unavailable".
+  throw err;
 }
