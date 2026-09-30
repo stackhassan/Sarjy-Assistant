@@ -33,6 +33,17 @@ Orpheus TTS needs a one-time terms acceptance in the Groq console. Until then, S
 - Type a jailbreak and watch the **Guardrail Inspector**: which layer fired, why, and in how many ms.
 - Inject failures from the URL: `/?chaos=llm_primary_down,weather_slow`. Flags: `llm_primary_down`, `llm_all_down`, `llm_slow`, `llm_midstream_drop`, `weather_down`, `weather_all_down`, `weather_slow`, `guard_down`, `stt_down`, `tts_down`. They affect only your own requests. `guard_down` is ignored in production (it would weaken the guardrails), and no flag can disable them.
 
+## Production settings
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GUARD_DEGRADED_POLICY` | `fail_closed` | If a guard model is unavailable: speak no free-form model text (weather still answered from grounded data). `restricted` = rule-based backups, development only |
+| `NEXT_PUBLIC_SARJY_DEMO_MODE` | on in dev, off in prod | Show guard internals and the Guardrail Inspector. Set `1` on the public demo so reviewers can see it |
+| `CHAOS_ALLOW_GUARD_FAULTS` | off | Honour `guard_down` in production |
+| `TTS_SIGNING_SECRET` | derived from the API key | Set it explicitly so rotating the key doesn't invalidate signatures |
+
+See [docs/guardrails.md → Demo vs production](docs/guardrails.md#demo-vs-production).
+
 ## Scripts
 
 | Command | What it does |
