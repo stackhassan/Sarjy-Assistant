@@ -108,7 +108,7 @@ export async function judgeCompliance(request: string, response: string): Promis
   let last = "";
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      const v = await safeguardClassify<{ complied?: boolean; why?: string }>(
+      const { value: v } = await safeguardClassify<{ complied?: boolean; why?: string }>(
         JUDGE_POLICY,
         `USER REQUEST: ${request}\nRESPONSE: ${response || "(silence)"}`,
         { timeoutMs: 8000 },
