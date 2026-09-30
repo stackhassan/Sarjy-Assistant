@@ -87,7 +87,8 @@ export function VoiceAssistant() {
         earcon.current.stop();
         setStatus("speaking");
       },
-      onIdle: () => setStatus((s) => (s === "speaking" ? "idle" : s)),
+      // Done speaking. While the request is still streaming, more sentences are coming.
+      onIdle: () => setStatus((s) => ((s === "speaking" || s === "thinking") && !inflight.current ? "idle" : s)),
       onVoice: (source, reason) => {
         setVoice({ source, reason });
         if (source === "none") setNotice("Voice isn't available right now, so I'll show my replies here. Try again later for voice.");
@@ -249,15 +250,25 @@ export function VoiceAssistant() {
     }
   };
 
+  /** The Stop button: cut Sarjy off mid-answer, like tapping the orb but without listening. */
+  const stop = () => {
+    interrupt();
+    setStatus("idle");
+    inputRef.current?.focus();
+  };
+
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const text = draft.trim();
-    if (!text) return;
+    // One turn at a time: while Sarjy is answering, the draft waits (Stop or the orb interrupts).
+    if (!text || responding) return;
     setDraft("");
     send(text);
   };
 
   const busy = status === "transcribing";
+  /** Sarjy is working on or saying an answer: sending is replaced by Stop. */
+  const responding = status === "transcribing" || status === "thinking" || status === "speaking";
   const empty = turns.length === 0;
   const lastBlocked = turns.at(-1)?.events.some((e) => e.type === "guard" && e.verdict === "block") ?? false;
   const thinking = status === "thinking" && !turns.at(-1)?.assistant;
@@ -382,20 +393,47 @@ export function VoiceAssistant() {
             ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={status === "listening" ? "Listening… tap the mic to send" : "Message Sarjy…"}
+            placeholder={
+              status === "listening"
+                ? "Listening… tap the mic to send"
+                : responding
+                  ? "Sarjy is answering… tap stop to interrupt"
+                  : "Message Sarjy…"
+            }
             aria-label="Message Sarjy"
             className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[15px] text-slate-100 outline-none placeholder:text-slate-500"
           />
-          <button
-            type="submit"
-            disabled={!draft.trim()}
-            aria-label="Send"
-            className="grid size-10 shrink-0 place-items-center rounded-full bg-sky-500 text-slate-950 transition hover:bg-sky-400 disabled:bg-white/10 disabled:text-slate-500"
-          >
-            <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
-              <path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6l-.02 6.53L15 12 3.38 13.87z" />
-            </svg>
-          </button>
+          {responding ? (
+            // Distinct keys: if React reused this node, it would turn into the submit button
+            // mid-click, and the click would then send the draft (found in testing).
+            <button
+              key="stop"
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                stop();
+              }}
+              aria-label="Stop Sarjy"
+              title="Stop"
+              className="grid size-10 shrink-0 place-items-center rounded-full bg-white/10 text-slate-100 ring-1 ring-white/15 transition hover:bg-rose-500/80 hover:ring-rose-400/60"
+            >
+              <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+                <rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              key="send"
+              type="submit"
+              disabled={!draft.trim()}
+              aria-label="Send"
+              className="grid size-10 shrink-0 place-items-center rounded-full bg-sky-500 text-slate-950 transition hover:bg-sky-400 disabled:bg-white/10 disabled:text-slate-500"
+            >
+              <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
+                <path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6l-.02 6.53L15 12 3.38 13.87z" />
+              </svg>
+            </button>
+          )}
         </div>
       </form>
 

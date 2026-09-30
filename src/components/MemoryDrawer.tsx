@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { authHeaders } from "@/lib/client/auth";
 import { bumpMemoryRev } from "@/lib/client/memoryRev";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 type Fact = { key: string; value: string; category: string };
 
@@ -14,6 +15,7 @@ export function MemoryDrawer({ refreshKey, onForget }: { refreshKey: number; onF
   const [open, setOpen] = useState(false);
   const [facts, setFacts] = useState<Fact[]>([]);
   const [available, setAvailable] = useState(true);
+  const [confirmAll, setConfirmAll] = useState(false);
 
   const [rev, setRev] = useState(0);
   const reload = useCallback(() => setRev((r) => r + 1), []);
@@ -38,7 +40,6 @@ export function MemoryDrawer({ refreshKey, onForget }: { refreshKey: number; onF
   }, [refreshKey, rev]);
 
   const forget = async (key?: string) => {
-    if (!key && !confirm("Forget everything Sarjy remembers about you?")) return;
     const res = await fetch(`/api/memory${key ? `?key=${encodeURIComponent(key)}` : ""}`, { method: "DELETE", headers: await authHeaders() });
     if (res.ok) {
       bumpMemoryRev();
@@ -77,12 +78,23 @@ export function MemoryDrawer({ refreshKey, onForget }: { refreshKey: number; onF
             ))}
           </ul>
           {facts.length > 0 && (
-            <button type="button" onClick={() => forget()} className="mt-3 text-xs text-rose-300/80 hover:text-rose-300">
+            <button type="button" onClick={() => setConfirmAll(true)} className="mt-3 text-xs text-rose-300/80 hover:text-rose-300">
               Forget everything
             </button>
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={confirmAll}
+        title="Forget everything?"
+        body={`Sarjy will forget all ${facts.length} thing${facts.length === 1 ? "" : "s"} it remembers about you. This can't be undone.`}
+        confirmLabel="Forget everything"
+        onCancel={() => setConfirmAll(false)}
+        onConfirm={() => {
+          setConfirmAll(false);
+          forget();
+        }}
+      />
     </div>
   );
 }
