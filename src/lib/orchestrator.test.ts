@@ -567,6 +567,7 @@ describe("memory end to end", () => {
     const first = await memoryTurn("My favorite color is teal", store);
     expect(store.facts).toEqual([{ key: "favorite_color", value: "teal", category: "preference", source_turn: "My favorite color is teal" }]);
     expect(first.of("guard").some((g) => g.layer === "L5_memory" && g.verdict === "pass")).toBe(true);
+    expect(first.of("done")[0].memoryChanged).toBe(true); // the client bumps its memory version
 
     const { chatBodies } = install({ replies: [{ text: "Your favorite color is teal." }] });
     await memoryTurn("What's my favorite color?", store);

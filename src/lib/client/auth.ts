@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { memoryRev } from "./memoryRev";
 
 let client: SupabaseClient | null | undefined;
 
@@ -35,5 +36,5 @@ export async function accessToken(): Promise<string | null> {
 
 export async function authHeaders(): Promise<Record<string, string>> {
   const token = await accessToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return token ? { Authorization: `Bearer ${token}`, "X-Sarjy-Memory-Rev": memoryRev() } : {};
 }

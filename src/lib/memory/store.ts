@@ -19,8 +19,11 @@ export interface MemoryStore {
 export class MemoryError extends Error {}
 
 /**
- * Facts for one user, cached per access token. Reads measured at ~0.9 s from a dev
- * machine, so we don't pay that on every turn: the cache is refreshed on every write.
+ * Facts for one user, cached per access token and memory version. Reads measured at
+ * ~0.9 s from a dev machine, so we don't pay that on every turn. Each instance drops its
+ * entry on its own writes, but on Vercel /api/memory and /api/turn can be different
+ * instances with different caches, so the browser also sends a version it bumps on every
+ * change: a new version is a new key, and no instance can serve the old list.
  */
 const cache = new TtlCache<Fact[]>(1000, 5 * 60_000);
 
@@ -29,7 +32,7 @@ const cache = new TtlCache<Fact[]>(1000, 5 * 60_000);
  * Postgres Row Level Security limits every query to their own rows. The server never
  * uses a service-role key, so a bug here can't read another user's memories.
  */
-export function supabaseStore(accessToken: string): MemoryStore | null {
+export function supabaseStore(accessToken: string, revision = ""): MemoryStore | null {
   const e = env();
   if (!e.NEXT_PUBLIC_SUPABASE_URL || !e.NEXT_PUBLIC_SUPABASE_ANON_KEY) return null;
   const db = createClient(e.NEXT_PUBLIC_SUPABASE_URL, e.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
@@ -38,7 +41,7 @@ export function supabaseStore(accessToken: string): MemoryStore | null {
   });
   const facts = () => db.from("facts");
   // Cache keyed by a hash, so raw access tokens are never kept as map keys.
-  const cacheKey = createHash("sha256").update(accessToken).digest("base64url");
+  const cacheKey = createHash("sha256").update(`${accessToken}:${revision}`).digest("base64url");
   const fail = (op: string, msg: string) => new MemoryError(`memory ${op} failed: ${msg}`);
   const down = () => {
     if (chaos("memory_down")) throw fail("request", "simulated outage (chaos)");

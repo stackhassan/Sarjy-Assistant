@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { authHeaders } from "@/lib/client/auth";
+import { bumpMemoryRev } from "@/lib/client/memoryRev";
 
 type Fact = { key: string; value: string; category: string };
 
@@ -39,7 +40,10 @@ export function MemoryDrawer({ refreshKey, onForget }: { refreshKey: number; onF
   const forget = async (key?: string) => {
     if (!key && !confirm("Forget everything Sarjy remembers about you?")) return;
     const res = await fetch(`/api/memory${key ? `?key=${encodeURIComponent(key)}` : ""}`, { method: "DELETE", headers: await authHeaders() });
-    if (res.ok) onForget?.();
+    if (res.ok) {
+      bumpMemoryRev();
+      onForget?.();
+    }
     reload();
   };
 

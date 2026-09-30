@@ -29,6 +29,8 @@ export type TurnEvent =
        * this turn, or the model would still read the fact in the conversation.
        */
       forgot?: boolean;
+      /** Memory changed this turn (remembered or forgot): the client bumps its memory version. */
+      memoryChanged?: boolean;
       /** Everything Sarjy said this turn, chain-signed; the client sends it back as history. */
       assistant: { text: string; sig: string; prev: string };
     }

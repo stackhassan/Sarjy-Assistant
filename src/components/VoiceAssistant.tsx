@@ -12,6 +12,7 @@ import { readEvents } from "@/lib/client/sse";
 import type { HistoryMessage, TurnEvent } from "@/lib/events";
 import { Inspector } from "./Inspector";
 import { MemoryDrawer } from "./MemoryDrawer";
+import { bumpMemoryRev } from "@/lib/client/memoryRev";
 import { Orb, STATUS_LABELS, type AssistantStatus } from "./Orb";
 
 export type Turn = {
@@ -190,6 +191,7 @@ export function VoiceAssistant() {
           assistantSig: e.type === "done" ? e.assistant.sig : t.assistantSig,
           assistantPrev: e.type === "done" ? e.assistant.prev : t.assistantPrev,
         }));
+        if (e.type === "done" && e.memoryChanged) bumpMemoryRev();
         if (e.type === "done" && e.forgot) contextFrom.current = turnsRef.current.length;
         if (e.type === "sentence") speaker.current?.enqueue(e);
         if (e.type === "error") speaker.current?.enqueue({ text: e.spokenFallback, sig: e.sig });
