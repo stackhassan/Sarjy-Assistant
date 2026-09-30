@@ -201,10 +201,10 @@ ${one("with Prompt Guard + safeguard running concurrently", c.withGuardsMs)}
 | Speech-to-text (Whisper turbo, ~2 s clip) | ${fmt(pct(c.sttMs, 50))} |
 | Server: request → first screened sentence (chat / weather) | ${fmt(ttfs50)} / ${fmt(ttfsW50)} |
 | TTS: Orpheus first byte / full first clip | ${fmt(pct(c.ttsTtfb, 50))} / ${fmt(pct(c.ttsTotal, 50))} |
-| **Estimated time to first audio (chat / weather)** | **${fmt(pct(c.sttMs, 50) + ttfs50 + pct(c.ttsTotal, 50))} / ${fmt(pct(c.sttMs, 50) + ttfsW50 + pct(c.ttsTotal, 50))}** |
+| **Estimated time to first audio (chat / weather)** | **${fmt(pct(c.sttMs, 50) + ttfs50 + pct(c.ttsTtfb, 50))} / ${fmt(pct(c.sttMs, 50) + ttfsW50 + pct(c.ttsTtfb, 50))}** |
 
 STT transcripts of the fixed clip: ${[...new Set(c.sttText)].map((t) => `"${t}"`).join(", ")}.
 
-The client plays a clip once it is fully downloaded, so TTS contributes its full clip time. Streaming WAV playback would cut that toward the first-byte time (see \`docs/guardrails.md\` → next steps).
+The client plays Orpheus audio as it streams in (Web Audio), so TTS contributes its first-byte time, not the full clip. Orpheus's 0.25-0.6 s of padding at each end of a clip is trimmed, and clips are scheduled back to back, so sentences join with a ~0.25 s pause (see \`docs/reliability.md\` → Techniques).
 `;
 }

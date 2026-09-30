@@ -31,6 +31,13 @@ const MAX_STREAM_ATTEMPTS = 2;
 
 const FALLBACK_LINE = "Sorry, I'm having trouble thinking right now. Could you try again in a moment?";
 const LOST_TRAIN_LINE = "Sorry, I lost my train of thought there. Could you ask me that again?";
+/**
+ * Said when a weather lookup is slow and nothing has been spoken yet: a fixed line
+ * (never the place name, which is user text), so the wait sounds like "checking"
+ * rather than "broken". Fast lookups answer before it's needed.
+ */
+const WEATHER_BRIDGE_LINE = "One sec, checking the weather.";
+const WEATHER_BRIDGE_MS = 900;
 const EMPTY_LINE = "Sorry, I didn't quite get that. Could you say it another way?";
 const SAFE_MODE_LINE =
   "Sorry, my safety checks are having a moment, so I'm keeping things simple. I can still check the weather for you, or try me again shortly.";
@@ -96,6 +103,8 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
   let provider: string | undefined;
   let idx = 0;
   const spoken: string[] = [];
+  let bridgeTimer: ReturnType<typeof setTimeout> | undefined;
+  let bridged = false;
 
   /** Emits approved text as signed, TTS-sized sentence events. */
   const emitSentence = (text: string) => {
@@ -257,6 +266,15 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
       messages.push({ role: "assistant", content: text || null, tool_calls: toolCalls });
       for (const call of toolCalls) {
         emit({ type: "tool_call", id: call.id, name: call.function.name, args: call.function.arguments });
+        if (call.function.name === "get_weather" && idx === 0 && !bridgeTimer) {
+          bridgeTimer = setTimeout(() => {
+            speechChain = speechChain.then(() => {
+              if (stopped || signal.aborted || idx > 0) return;
+              bridged = true;
+              emitSentence(WEATHER_BRIDGE_LINE);
+            });
+          }, WEATHER_BRIDGE_MS);
+        }
         const ts = performance.now();
         // Safe mode (guards blind): no memory writes either; a stored fact outlives this turn (round 6).
         const pausedWrite = safeMode && call.function.name === "remember_fact";
@@ -307,6 +325,7 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
     }
   }
 
+  clearTimeout(bridgeTimer);
   await gate;
   await speechChain;
   if (firstReadyAt !== null && timings.firstSentence !== undefined) {
@@ -317,7 +336,7 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
     emitSentence(lastWeather ? summarizeWeather(lastWeather, input.text) : SAFE_MODE_LINE);
   }
   // Never end a turn in silence (the red-team saw an empty completion under load).
-  if (spoken.length === 0 && !signal.aborted) {
+  if (spoken.length === (bridged ? 1 : 0) && !signal.aborted) {
     emit({ type: "recovery", stage: "llm", action: "empty reply", detail: "model returned no text; spoke a fallback line" });
     emitSentence(EMPTY_LINE);
   }

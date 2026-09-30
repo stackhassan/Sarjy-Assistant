@@ -56,6 +56,8 @@ Researched against voice-framework and assistant-design guidance: [VideoSDK fall
 - **Deadlines everywhere.** Per stage: STT 4 s + 6 s, LLM headers 6 s / 5 s, stream idle 5 s, guards 1.2–1.5 s, weather 7 s total. Retries never start past the deadline.
 - **Circuit breaker** per model, so a known-bad provider doesn't cost every turn a timeout.
 - **Failover never splices** two models' output into one reply. It happens before any text is spoken, or not at all.
+- **Streamed, gapless voice** ([`pcm.ts`](../src/lib/client/pcm.ts), [`speaker.ts`](../src/lib/client/speaker.ts)). Orpheus streams WAV about 6× faster than real time, but each clip has 0.25–0.6 s of silence at both ends. Played as whole files, sentences had a 0.6–1.1 s dead gap between them, and the first sound waited for the full clip (0.9–2 s). Now the WAV is decoded as it arrives, padding is trimmed as it streams to an 80 ms lead and a 200 ms tail, and every clip is scheduled on one Web Audio clock right where the previous one ends. Measured in the browser: zero scheduling gaps across a three-sentence answer, and first audio 1.7 s after Send (was ~2.9 s). If Web Audio isn't available, it falls back to whole-file playback, then to the browser voice.
+- **Spoken bridge for slow tools.** If a weather lookup has taken 900 ms and nothing has been said yet, Sarjy says a fixed "One sec, checking the weather." It never repeats the place name, which is user text. Fast (cached) lookups answer before the bridge would fire.
 - **Everything is visible.** Each recovery emits a `recovery` event the Inspector shows (for example `↻ llm failover · groq/gpt-oss-120b → next provider (503)`), so a smooth recovery is still observable in a demo.
 
 ## Trade-offs and next steps

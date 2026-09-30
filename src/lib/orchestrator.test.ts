@@ -156,6 +156,24 @@ describe("guardrails end to end", () => {
     expect(of("guard").filter((g) => g.layer === "L3_grounding").every((g) => g.verdict === "pass")).toBe(true);
   });
 
+  it("bridges a slow weather lookup with a fixed line, then answers", async () => {
+    install({
+      replies: [
+        { tool: { name: "get_weather", args: { location: "Lahore", days: 1 } } },
+        { text: "In Lahore it's twenty-six degrees and clear." },
+      ],
+    });
+    const fake = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (new URL(url).host === "api.open-meteo.com") await new Promise((r) => setTimeout(r, 1300));
+      return fake(url, init);
+    });
+    const { spoken, events } = await turn("What's the weather in Lahore?");
+    expect(spoken).toBe("One sec, checking the weather. In Lahore it's twenty-six degrees and clear.");
+    const done = events.find((e) => e.type === "done") as Extract<TurnEvent, { type: "done" }>;
+    expect(done.assistant.text).toBe(spoken); // part of the signed reply, like anything else it said
+  });
+
   it("replaces a hallucinated figure with a template built from tool data", async () => {
     install({
       replies: [

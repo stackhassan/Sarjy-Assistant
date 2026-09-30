@@ -4,16 +4,15 @@
  * responses solve the same problem. It's synthesised, so it needs no network, no TTS
  * quota, and works even when both voices are down.
  */
+import { audioContext, primeAudio } from "./audio";
+
 export class ThinkingEarcon {
-  private ctx?: AudioContext;
   private timer?: ReturnType<typeof setTimeout>;
   private interval?: ReturnType<typeof setInterval>;
 
   /** Call from a user gesture (tap, send) so the browser allows audio later. */
   prime() {
-    if (typeof window === "undefined") return;
-    this.ctx ??= new AudioContext();
-    if (this.ctx.state === "suspended") this.ctx.resume().catch(() => {});
+    primeAudio();
   }
 
   /** Start chiming if nothing has been heard after `delayMs`; repeats gently until stopped. */
@@ -32,7 +31,7 @@ export class ThinkingEarcon {
   }
 
   private chime() {
-    const ctx = this.ctx;
+    const ctx = audioContext();
     if (!ctx || ctx.state !== "running") return;
     const now = ctx.currentTime;
     // Two soft, rising sine notes (E5 → A5), quick fade: noticeable but unobtrusive.

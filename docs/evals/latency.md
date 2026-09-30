@@ -33,8 +33,10 @@ All times in ms, measured server-side from request start. "First sentence" is wh
 | Speech-to-text (Whisper turbo, ~2 s clip) | 300 |
 | Server: request → first screened sentence (chat / weather) | 2254 / 2892 |
 | TTS: Orpheus first byte / full first clip | 198 / 896 |
-| **Estimated time to first audio (chat / weather)** | **3450 / 4088** |
+| **Estimated time to first audio (chat / weather)** | **2752 / 3390** |
 
 STT transcripts of the fixed clip: "What's the weather in Lahore today?".
 
-The client plays a clip once it is fully downloaded, so TTS contributes its full clip time. Streaming WAV playback would cut that toward the first-byte time (see `docs/guardrails.md` → next steps).
+The client plays Orpheus audio as it streams in (Web Audio), so TTS contributes its first-byte time, not the full clip. Orpheus's 0.25-0.6 s of padding at each end of a clip is trimmed, and clips are scheduled back to back, so sentences join with a ~0.25 s pause (see `docs/reliability.md` → Techniques).
+
+_Estimate updated 2026-09-30 for streamed playback, using the stage timings above (previously 3450 / 4088 with whole-file playback). Measured in the browser after the change: first audio 1.68 s after pressing Send for a chat answer (text input, so no STT), and zero scheduling gaps across 63 audio buffers in a three-sentence answer._
