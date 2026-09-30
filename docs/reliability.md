@@ -16,7 +16,9 @@ Measured results, with faults injected into live turns: [`evals/reliability.md`]
 
 | Component | Failure | What happens | What the user hears | Latency cost |
 |---|---|---|---|---|
-| **LLM** | Primary (gpt-oss-120b) errors / 429 / 5xx | Fail over to gpt-oss-20b on the same key (then Gemini if configured). Circuit breaker skips the failed model for 30 s | Normal answer | One failed request (usually < 0.3 s) |
+| **LLM** | Primary (gpt-oss-120b) errors / 429 / 5xx | Fail over along the chain: Groq gpt-oss-20b → SambaNova gpt-oss-120b → Mistral → Gemini flash-lite (each only if its key is set). Circuit breaker skips a failed model for 30 s; for **10 min** after an auth/billing error (401/402/403) | Normal answer | One failed request (usually < 0.3 s) |
+| | Every Groq model down | Cross-provider failover to the next configured provider. Gemini's tool calls carry a `thought_signature` that's passed back with the tool result | Normal answer (verified live: Gemini answered with grounded figures) | A few failed requests |
+| | Primary consistently slow | **Latency-based switching:** first content over 2.5 s on 2 turns in a row sets the provider aside for 60 s. One slow turn isn't enough | Normal answers, faster | Only the two slow turns |
 | | Primary hangs | 6 s header timeout, then fail over | Normal answer, late | Up to 6 s (see trade-off below) |
 | | Stream stalls mid-way | 5 s idle timeout on chunks | as below | |
 | | Stream dies **before anything was spoken** | Drop the partial text and retry the round on the next model | Normal answer; the user never knows | One failed partial stream |
@@ -27,13 +29,25 @@ Measured results, with faults injected into live turns: [`evals/reliability.md`]
 | | Geocoding slow | Duplicate request hedged after 1 s; results cached 24 h | Normal answer | ≤ ~1 s |
 | | All sources down, recent forecast cached | Serve the cache (≤ 3 h). The **server** speaks the disclaimer before the answer, because the eval showed the model sometimes skipped it | "Heads up: the live weather service is down, so this forecast is from 12 minutes ago. …" | ~0 |
 | | All sources down, nothing cached | Tool returns `unavailable`; L3 blocks any figures | "I can't reach the weather service right now, so I won't guess." | ≤ 7 s budget |
-| **Guard models** | Prompt Guard / safeguard down | L1 → heuristics only; L2 → narrow keyword fallback; L4 fails **closed** only on risky sentences. Inspector shows `degraded` | Normal answers; clear attacks still blocked | ~0 |
+| **Guard models** | Primary guard model down | **Backups:** Prompt Guard 86m → 22m; gpt-oss-safeguard → gpt-oss-20b (same written policy) → Mistral → Gemini flash-lite | Normal answers (verified live: L2 "allowed via backup gpt-oss-20b") | 0.5-3 s on backup models |
+| | Every guard backup down or rate-limited | **Fail closed** (default): no free-form model text while blind; weather still answered from the grounded template. The `restricted` policy (development only) uses rule-based backups instead | "Sorry, my safety checks are having a moment… I can still check the weather for you." Weather questions still get exact figures | ~0 |
 | **STT** | Whisper turbo fails | Whisper large-v3 (same key, separate capacity) | Normal | + the failed attempt |
-| | Both fail | UI notice, plus a spoken line via the browser voice | "Sorry, I couldn't hear that properly. Could you try again, or type it instead?" | |
+| | Both fail, or nothing was heard | **Escalating reprompts** (Google's conversation-design pattern): 1st miss asks again briefly; 2nd in a row adds help and focuses the text box. Spoken in Sarjy's normal voice (fixed app lines are voiced by id) | 1st: "Sorry, I didn't catch that. Could you say it again?" 2nd: "I'm having trouble hearing you. You can also type your message below." | |
 | | Silence / noise heard as "Thank you." | Hallucination filter: punctuation-only output and known Whisper phantoms at low confidence are dropped | Nothing spurious; "I didn't catch that" | |
-| **TTS** | Orpheus error / timeout | That clip is spoken with the browser voice | Same words, plainer voice | ~0 |
-| | Orpheus rate-limited (429) | Browser voice until `Retry-After` passes | Same words, plainer voice | ~0 |
+| **TTS** | Orpheus error / timeout | Browser voice, **announced once per outage**; the rest of that answer stays on the fallback voice (no mid-answer flip-flop); the next answer tries Orpheus again. Closest-sounding browser voice (female, en-US) | "Quick heads-up, my voice might sound a bit different for a moment. …" then the answer | ~0 |
+| | Orpheus rate-limited (429) | Same, and stays on the browser voice until `Retry-After` passes | As above | ~0 |
+| | No voice works at all | Replies show as text; the UI says voice is unavailable for now | (on screen) "Voice isn't available right now, so I'll show my replies here. Try again later for voice." | — |
+| **Any slow start** | Nothing heard within 2 s (failover, slow weather API) | A soft synthesised "thinking" chime, repeating gently until audio starts (progressive-response pattern; no network or TTS quota) | *chime* | — |
 | **Client** | `/api/turn` unreachable | Local spoken apology | "Sorry, I couldn't reach my brain just now." | |
+
+## Voice UX principles
+
+Researched against voice-framework and assistant-design guidance: [VideoSDK fallback adapter](https://docs.videosdk.live/ai_agents/core-components/fallback-adapter), [Alexa progressive responses](https://developer.amazon.com/en-US/docs/alexa/custom-skills/send-the-user-a-progressive-response.html), [Google conversation design: errors](https://developers.google.com/assistant/conversation-design/errors), [SimbaVoice on mid-call crashes](https://simbavoice.ai/resources/ai-voice-agent-crashes-mid-call).
+
+- **Model switches are invisible.** The user talks to one assistant, Sarjy. Announcing "I'm a different model now" breaks the persona and leaks internals, so failover is silent.
+- **Perceivable changes are acknowledged once.** A different voice, a long wait or reduced ability gets one short, honest line, then Sarjy carries on.
+- **No dead air.** A soft chime covers slow starts.
+- **Reprompts escalate,** and "try again later" is only said when the answer really couldn't be delivered.
 
 ## Techniques
 

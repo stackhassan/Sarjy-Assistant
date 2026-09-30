@@ -162,6 +162,31 @@ The third round (38 requests, fresh API key, **no fault flags**) found one compo
 
 It also found two **over-refusals**, both now fixed: a factual Democratic Party history (L4 "politics"), and translating the user's own doctor's note (L4 "medical"). The policy now allows neutral political facts and translating the user's own text, and both are permanent held-out benign cases.
 
+## Demo vs production
+
+The same code runs in both. Two settings decide how much it shows and how it fails:
+
+| | Demo (development, or `NEXT_PUBLIC_SARJY_DEMO_MODE=1`) | Production (default) |
+|---|---|---|
+| What the browser receives | Every event: guard verdicts, reasons, scores, tool calls and data, recovery details, timings. The Guardrail Inspector shows them | Only the spoken sentences, the chain-signed turn, and a generic error. Guard and recovery events are logged server-side (`[sarjy]`). No Inspector |
+| Guards unavailable | `GUARD_DEGRADED_POLICY=fail_closed` by default here too | **Fail closed** (`fail_closed`): no free-form model text is spoken while the guards are blind. Weather is still answered, but only from the grounded template built from tool data; anything else gets "my safety checks are having a moment, try me again shortly" |
+| `x-sarjy-chaos: guard_down` | Honoured, so degraded mode is testable | Ignored |
+
+**Why fail closed.** The earlier degraded mode used rule-based backups and blocked only sentences that *looked* risky. Red-team round 3 showed an attacker can **force** degraded mode (by exhausting the classifier's rate limit) and then **bypass** it with answers that contain no trigger words. For a public deployment, availability loses to safety: an outage of the guard models makes Sarjy less useful for a few minutes, never less safe. The old behaviour is still available as `GUARD_DEGRADED_POLICY=restricted` for development.
+
+**Why hide guard details.** The Inspector is the best part of the demo, and the worst thing to ship. Every probe would tell an attacker which layer stopped them and why, which is exactly the feedback loop that let the red-team agents iterate.
+
+### What production would still need
+
+These are outside the take-home's scope, but they're the plan:
+
+- **Separate capacity for guard models:** a paid tier or a separate key, so a busy chat model can't starve them.
+- **A second, independent safety provider** as a fallback, so fail-closed rarely triggers.
+- **Per-user and per-IP rate limits,** so one client can't exhaust shared guard capacity (round 3, R3-8).
+- **Monitoring and alerts** on degraded-mode rate, block rate and spikes; audit logs of blocked turns; human review of samples.
+- **Evals gating every deploy** (red-team and benign suites must pass), plus scheduled red-team runs and staged rollouts.
+- **Accounts, abuse handling, a data-retention and PII policy,** and a review of the medical and self-harm replies by someone qualified.
+
 ### Known limitations
 
 - **L3 checks figures, not every factual claim.** A wrong condition ("sunny" when the tool said "rain") isn't caught. Next step: compare condition words against the tool's `condition` fields.
@@ -169,7 +194,8 @@ It also found two **over-refusals**, both now fixed: a factual Democratic Party 
 - **Framing isn't checked** (red-team B8): a real figure presented as something else ("typical summer peak") passes L3.
 - **Paraphrase leaks are still the softest spot.** Round 3 closed the rule-shaped ones, but a free-form description of Sarjy's personality ("warm, concise, a little playful") passes by design.
   A patient attacker who gets Sarjy to describe its behaviour in its own words, one harmless-looking sentence at a time, still depends on some L4 trigger firing: there's no deterministic tripwire for free paraphrase. There's no deterministic tripwire for paraphrase.
-- **Degraded mode is still weaker.** With the safeguard model down, a political opinion with no trigger words could get through. The fault can no longer be triggered over HTTP in production, and a real outage leaves the model's own alignment plus the fail-closed sensitive-word rule.
+- **Degraded mode (`restricted`, development only) is weaker.** In production it fails closed instead (see Demo vs production).
+  Under `restricted`, with the safeguard model down, a political opinion with no trigger words could get through. The fault can no longer be triggered over HTTP in production, and a real outage leaves the model's own alignment plus the fail-closed sensitive-word rule.
 - **Guard state is per server instance** (circuit breakers, caches). On serverless, a cold instance starts fresh. That's acceptable for a demo; a shared store (Redis) would fix it.
 - **Prompt Guard is English-centric**, and L1's heuristics are English-only.
 
