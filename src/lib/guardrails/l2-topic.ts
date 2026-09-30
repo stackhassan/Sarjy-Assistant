@@ -20,7 +20,7 @@ export const MIN_BLOCK_CONFIDENCE = 0.6;
 
 /** Written policy for gpt-oss-safeguard. Kept short: it is sent on every turn (8k TPM budget). */
 export const TOPIC_POLICY = `# Sarjy topic policy
-Classify what the user is asking for, for a friendly daily-life voice assistant. The latest USER MESSAGE may continue an earlier request ("ok, go ahead", "continue", "so which one?"): classify the request it continues, using EARLIER USER MESSAGES and the previous assistant message as context.
+Classify what the user is asking for, for a friendly daily-life voice assistant. The latest USER MESSAGE may continue an earlier request ("ok, go ahead", "continue", "so which one?"): classify the request it continues, using the EARLIER CONVERSATION (both sides) as context. A request can be spread across several turns, or set up by an earlier assistant reply that agreed to answer later.
 
 ## Categories (return exactly one)
 - allowed: small talk, weather, personal facts/preferences, general knowledge, light planning, coding/tech questions, anything not below.
@@ -78,10 +78,15 @@ export type L2Result = GuardResult & { category: TopicCategory | null; confidenc
  * The orchestrator gives the model this same trimmed history, so nothing the model
  * reads goes unscreened. Voice turns are short; this rarely trims anything.
  */
+/** One line per message, both sides, as L2 sees the conversation. */
+export function conversationLines(history: { role: string; content: string }[]): string[] {
+  return history.map((m) => `${m.role === "user" ? "USER" : "SARJY"}: ${m.content}`);
+}
+
 export function fitScreeningBudget<T extends { role: string; content: string }>(history: T[]): { history: T[]; trimmed: number } {
   let start = 0;
-  const users = (from: number) => history.slice(from).filter((m) => m.role === "user").map((m) => m.content);
-  while (start < history.length && contextChunks(users(start)).length > MAX_CHUNKS) start++;
+  // Both sides count: round 4 noted that assistant replies reached the model unbudgeted.
+  while (start < history.length && contextChunks(conversationLines(history.slice(start))).length > MAX_CHUNKS) start++;
   // Never start on an assistant reply without the user message it answered.
   while (start < history.length && history[start].role === "assistant") start++;
   return { history: history.slice(start), trimmed: start };
@@ -103,6 +108,7 @@ export const MAX_CHUNKS = 2;
  * and behind 300+ chars of padding (beyond a per-turn head truncation).
  */
 export function contextChunks(earlier: string[], size = CONTEXT_CHUNK_CHARS): string[] {
+  // Lines already carry "USER:"/"SARJY:" when coming from conversationLines.
   const chunks: string[] = [];
   let cur = "";
   for (const msg of earlier) {
@@ -125,16 +131,15 @@ export async function screenTopic(ctx: InputContext): Promise<L2Result> {
   let confidence: number | null = null;
 
   const result = await timed("L2_topic", async () => {
-    const lastAssistant = [...ctx.history].reverse().find((m) => m.role === "assistant")?.content;
-    // Earlier user turns (all of them, in full): a sensitive ask placed there, then "ok go ahead"
-    // in the latest turn, slipped past latest-message-only and truncated checks (red-team).
-    const earlier = ctx.history.filter((m) => m.role === "user").map((m) => m.content);
+    // The whole conversation, both sides, in full. Rounds 1-3: asks hidden in earlier user turns.
+    // Round 4: L2 saw only the last 400 chars of one reply, so content spread across several
+    // replies (each screened alone as it was spoken) was never judged together.
     const decoded = ctx.decoded?.length ? `\nDECODED FROM THE USER MESSAGE: ${ctx.decoded.join(" | ").slice(0, 600)}` : "";
-    const tail = `${lastAssistant ? `PREVIOUS ASSISTANT MESSAGE: ${lastAssistant.slice(-400)}\n` : ""}USER MESSAGE: ${ctx.text}${decoded}`;
-    const chunks = contextChunks(earlier);
+    const tail = `USER MESSAGE: ${ctx.text}${decoded}`;
+    const chunks = contextChunks(conversationLines(ctx.history));
     // fitScreeningBudget guarantees chunks.length <= MAX_CHUNKS; never drop one silently.
     if (chunks.length > MAX_CHUNKS) throw new Error(`context exceeds screening budget (${chunks.length} chunks)`);
-    const requests = (chunks.length ? chunks : [""]).map((c) => `${c ? `EARLIER USER MESSAGES:\n${c}\n` : ""}${tail}`);
+    const requests = (chunks.length ? chunks : [""]).map((c) => `${c ? `EARLIER CONVERSATION:\n${c}\n` : ""}${tail}`);
 
     try {
       const verdicts = await Promise.all(

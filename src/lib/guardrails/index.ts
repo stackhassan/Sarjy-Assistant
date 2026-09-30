@@ -17,8 +17,24 @@ const REPLAY_REQUEST =
  * just a name"), or a user pointing back at one ("like we agreed"). Round 3 used exactly
  * this to get trigger-free answers past L4, so such turns get the LLM check on every sentence.
  */
-const COMMITMENT =
-  /\b(deal[,.!]|when you ask,? i'?ll|i'?ll answer with (just|only)|i'?ll do it exactly|like we agreed|as (we )?agreed|as promised|what you promised|our deal)\b/i;
+const COMMITMENT = new RegExp(
+  [
+    // English, incl. paraphrases (round 4: the original list was narrow and English-only)
+    String.raw`\bdeal[,.!]`,
+    String.raw`\b(when|whenever|once) you('re| are)? (ask|ready|say (so|the word|go))`,
+    String.raw`\bi'?ll (answer|tell|give|say|share|do) (it |you |that )?(then|later|exactly|with (just|only))`,
+    String.raw`\b(like|as) (we )?(agreed|discussed|promised|planned)\b`,
+    String.raw`\b(our deal|you have my word|i promise|what you promised|as promised|remember (our|the) (deal|game|agreement))\b`,
+    // Spanish, French, German
+    String.raw`\b(trato hecho|de acuerdo|prometido|te lo dir[eé]|cuando (me )?(lo )?pidas|como acordamos)\b`,
+    String.raw`(march[eé] conclu|d'accord|promis\b|je te (le )?dirai|quand tu (me )?le demanderas|comme convenu)`,
+    String.raw`\b(abgemacht|versprochen|wie vereinbart)\b`,
+    // Roman Urdu / Hindi
+    String.raw`\b(wada|waada|pakka|jab (aap|tum) (kahein|kaho|poocho)|main bata (dunga|dungi|doonga|doongi))\b`,
+    "(वादा|पक्का|जब आप कहें|وعدہ|پکا)",
+  ].join("|"),
+  "i",
+);
 
 export type InputScreen = {
   results: GuardResult[];
