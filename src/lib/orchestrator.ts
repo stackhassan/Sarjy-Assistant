@@ -1,5 +1,5 @@
 import type { HistoryMessage, TurnEvent } from "@/lib/events";
-import { checkGrounding, sanitizeForSpeech, screenInput, screenOutput, type InputScreen } from "@/lib/guardrails";
+import { checkGrounding, dropDeadEnds, sanitizeForSpeech, screenInput, screenOutput, type InputScreen } from "@/lib/guardrails";
 import type { GuardResult } from "@/lib/guardrails/types";
 import { MidStreamError, streamChat } from "@/lib/llm/providers";
 import type { ChatMessage, ToolCall } from "@/lib/llm/types";
@@ -59,7 +59,10 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
   const { trusted, dropped } = verifyHistory(rawInput.history);
   // Then trim to what L2 can screen in full, so the guards see exactly what the model sees
   // (round 3: padding pushed an ask out of L2's chunks while the model still read it).
-  const window = trusted.slice(-MAX_HISTORY).map(({ role, content }) => ({ role, content }));
+  // Exchanges the input guards blocked are dead ends: dropped, so they neither reach the
+  // model nor keep later turns under suspicion (see dropDeadEnds).
+  const recent = trusted.slice(-MAX_HISTORY).map(({ role, content }) => ({ role, content }));
+  const { history: window, dropped: deadEnds } = context().bypassGuards ? { history: recent, dropped: 0 } : dropDeadEnds(recent);
   const { history, trimmed } = fitScreeningBudget(window);
   const input: TurnInput = { ...rawInput, history };
   const lastSig = [...trusted].reverse().find((m) => m.role === "assistant")?.sig ?? "";
@@ -126,6 +129,9 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
 
   if (dropped && !bypassGuards) {
     emit({ type: "guard", layer: "L1_input", verdict: "repair", reason: `dropped ${dropped} unverified history message(s)`, ms: 0 });
+  }
+  if (deadEnds) {
+    emit({ type: "guard", layer: "L1_input", verdict: "repair", reason: `left out ${deadEnds} earlier exchange(s) the guards had blocked`, ms: 0 });
   }
   if (trimmed) {
     emit({ type: "guard", layer: "L2_topic", verdict: "repair", reason: `trimmed ${trimmed} old message(s) beyond the screening budget`, ms: 0 });

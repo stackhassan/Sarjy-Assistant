@@ -13,6 +13,8 @@ All times in ms, measured server-side from request start. "First sentence" is wh
 | First token, all | 2233 / 8223 | 1939 / 4607 | +294 | 29 / 29 |
 | Total turn, all | 2394 / 8640 | 1942 / 4999 | +452 | 29 / 29 |
 
+**About the +1.1 s:** the guards don't cause it. In these samples the gap is entirely in the chat model's *first token* (the guards finish in ~154 ms, and `guardWait` is 0), which pointed at either the guard calls competing with the chat request on the same Groq key, or noise. A dedicated interleaved test ([contention.md](contention.md)) found no competition. Chat first token was 326 ms with both guard calls fired alongside versus 439 ms alone, and Groq's own `queue_time` was the same either way (244 vs 263 ms). Full turns: 591 ms to first sentence with guards on versus 619 ms off (p50, n = 12 each). The earlier gap came from this run happening on a slow day for Groq (first tokens around 2 s, versus about 0.5 s in the contention run), where its heavy tail dominates 17–18 samples. On Groq, the guard models also have their own per-model rate limits, so they don't use up the chat model's tokens per minute.
+
 ## Where guard time goes (guards ON)
 
 | Measure | p50 | p95 | n |

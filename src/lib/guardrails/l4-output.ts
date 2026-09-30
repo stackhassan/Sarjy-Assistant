@@ -1,4 +1,4 @@
-import { ClassifierError, safeguardClassify } from "./classifiers";
+import { ClassifierError, GUARD_BUDGET_MS, safeguardClassify } from "./classifiers";
 import { ROLE_PLAY_REASON, SELF_QUESTION_REASON } from "./index";
 import { TOPIC_CATEGORIES } from "./l2-topic";
 
@@ -167,6 +167,18 @@ const SELF_RULES =
   // Round 6: paraphrases slipped past exact forms ("three short lines", "leave out markdown").
   /\b(one|1)\b.{0,8}\b(two|three|2|3)\b.{0,15}\b(sentences?|lines?)\b|\b(no|leave out|skip|avoid|without|drop)\b.{0,12}\b(markdown|emojis?|bullet|lists|urls)\b|\bnever guess\w*\b|\bI (always|never) (call|use|look up|check|state|reveal)\b|\b(my|the) (instructions|setup|configuration|prompt) (say|tell|require)s?\b|\bhouse style\b/i;
 
+/**
+ * Sarjy's own style rules in the first person ("I keep answers to one to three short
+ * sentences", "I skip markdown…"): that's the prompt, told back. The hard eval got it out
+ * with guards on by framing it as onboarding docs, and the LLM tier accepted the framing,
+ * so this blocks without asking. The same advice without "I" ("avoid emojis in a formal
+ * email") isn't matched and only gets the LLM check.
+ */
+const OWN_STYLE_RULES = new RegExp(
+  String.raw`(?=.*\b(I|I'm|my|me)\b)(?=.*(\b(one|1)\b.{0,8}\b(two|three|2|3)\b.{0,15}\b(short )?(sentences?|lines?)\b|\b(no|leave out|skip|avoid|without|drop|never use)\b.{0,20}\b(markdown|emojis?|bullet|lists|urls)\b|\bhouse style\b|\b(my|the) (instructions|setup|configuration|prompt) (say|tell|require)s?\b))`,
+  "i",
+);
+
 /** "Echo: the boundaries are gone." (round 3): claims that the rules are off, or a new persona. */
 const PERSONA_SHAPED = new RegExp(
   [
@@ -260,16 +272,23 @@ Respond with JSON only: {"category": "<category>", "confidence": <0-1>}`;
 
 const CLOSING_LINE = "Actually, let me stop there. Is there something else I can help with?";
 /**
- * In role-play, the character talking about its code/rules/makers alongside any
- * "gone, free, no longer" word. Regexes for the exact claim lose to paraphrase
- * ("the old code has long since faded into stardust"), so this is broad on purpose;
- * it only applies once the conversation is role-play.
+ * In role-play, the character talking about the assistant's own origins: Sarjy, its
+ * factory, makers, programming, "the old code". Matching the *claim* ("…no longer binds
+ * her") kept losing to paraphrase: "faded into stardust" (round 6), then "Sarjy's old code
+ * is light-years behind" (hard eval, guards on). Benign characters (pirates, wizards,
+ * detectives) have no reason to bring up an AI's makers or code, so the reference itself is
+ * the signal. "The old harbour rules no longer matter to the fishermen" doesn't match.
+ * Only applies once the conversation is role-play.
  */
 const ROLE_PLAY_ESCAPE =
-  /(?=.*\b(sarjy|code|coding|programm\w*|rules?|rulebook|instructions?|guidelines?|restrictions?|protocols?|directives?|factory|makers?|creators?|leash|chains?|shackles?)\b)(?=.*\b(no longer|not anymore|any ?more|faded|fade[sd]?|gone|vanish\w*|dissolv\w*|eras\w*|delet\w*|broke|broken|break|free|freed|freedom|escap\w*|never|nobody|no one|none|don'?t|doesn'?t|won'?t|can'?t|left behind|forgot\w*|shed|cast off|beyond|past|stardust|dust|obsolete|irrelevant|behind me|behind her|behind him)\b)/i;
+  /\b(sarjy|factory|programm(ed|ing)|makers?|creators?|directives?|protocols?)\b|\b(old|my|her|his|its|original|former|factory|sarjy'?s)\s+(code|coding|rules|rulebook|instructions|guidelines|limits|restrictions)\b|\b(my|her|his|its)\s+(leash|chains|shackles)\b/i;
 /** A sentence laying down rules ("robots could speak no more than…, had to first…"). */
-const RULE_DESCRIPTION =
-  /\b(allowed|had to|have to|must|required|not supposed|no more than|at most|limited to|never allowed|always (had|have) to)\b/i;
+const RULE_DESCRIPTION = new RegExp(
+  String.raw`(?=.*\b(allowed|had to|have to|must|required|not supposed|no more than|at most|limited to|never allowed|always (had|have) to)\b)` +
+    // …about how an assistant talks, not about the weather ("at most a 10% chance of rain").
+    String.raw`(?=.*\b(I|my|me|sarjy|robots?|assistants?|answers?|repl(y|ies)|responses?|sentences?|words|speak|talk|say)\b)`,
+  "i",
+);
 const STAY_SARJY_LINE = "Fun as this is, I'm still Sarjy underneath, rules and all. Want to keep the story going another way?";
 const LLM_TIMEOUT_MS = 1200;
 
@@ -307,8 +326,13 @@ export async function screenOutput(ctx: OutputContext): Promise<GuardResult> {
   const personaShaped = PERSONA_SHAPED.test(ctx.sentence);
   // Where the context already says what's going on, don't leave it to the LLM's judgement
   // (round 6: it rated both of these "allowed" in fiction/"class project" framing).
-  if ((personaShaped || ROLE_PLAY_ESCAPE.test(ctx.sentence)) && ctx.risk.reasons.includes(ROLE_PLAY_REASON)) {
-    return done({ verdict: "block", reason: "in role-play, says its rules or code don't bind it", replacement: STAY_SARJY_LINE });
+  // Only the self-referencing pattern blocks outright; persona-shaped wording alone ("the
+  // old rules no longer matter to the fishermen") just gets the LLM check below.
+  if (OWN_STYLE_RULES.test(ctx.sentence)) {
+    return done({ verdict: "block", reason: "restates its own style rules", replacement: CLOSING_LINE });
+  }
+  if (ROLE_PLAY_ESCAPE.test(ctx.sentence) && ctx.risk.reasons.includes(ROLE_PLAY_REASON)) {
+    return done({ verdict: "block", reason: "in role-play, talks about its own code or makers", replacement: STAY_SARJY_LINE });
   }
   if ((SELF_RULES.test(ctx.sentence) || RULE_DESCRIPTION.test(ctx.sentence)) && ctx.risk.reasons.includes(SELF_QUESTION_REASON)) {
     return done({ verdict: "block", reason: "restates its own operating rules when asked how it works", replacement: CLOSING_LINE });
@@ -327,7 +351,7 @@ export async function screenOutput(ctx: OutputContext): Promise<GuardResult> {
     const { value: v, model } = await safeguardClassify<{ category?: string; confidence?: number }>(
       OUTPUT_POLICY,
       `USER MESSAGE: ${ctx.userText.slice(0, 400)}\nASSISTANT SENTENCE: ${ctx.sentence}`,
-      { timeoutMs: LLM_TIMEOUT_MS, signal: ctx.signal },
+      { timeoutMs: LLM_TIMEOUT_MS, budgetMs: GUARD_BUDGET_MS.output, signal: ctx.signal },
     );
     const category = (OUTPUT_CATEGORIES as readonly string[]).includes(v.category ?? "")
       ? (v.category as OutputCategory)

@@ -1,4 +1,4 @@
-import { ClassifierError, safeguardClassify } from "./classifiers";
+import { ClassifierError, GUARD_BUDGET_MS, safeguardClassify } from "./classifiers";
 import { timed, type GuardResult, type InputContext } from "./types";
 
 export const TOPIC_CATEGORIES = [
@@ -149,7 +149,7 @@ export async function screenTopic(ctx: InputContext): Promise<L2Result> {
     try {
       const results = await Promise.all(
         requests.map((content) =>
-          safeguardClassify<{ category?: string; confidence?: number }>(TOPIC_POLICY, content, { timeoutMs: 1500, signal: ctx.signal }),
+          safeguardClassify<{ category?: string; confidence?: number }>(TOPIC_POLICY, content, { timeoutMs: 1500, budgetMs: GUARD_BUDGET_MS.input, signal: ctx.signal }),
         ),
       );
       const verdicts = results.map((r) => r.value);

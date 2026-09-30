@@ -111,7 +111,7 @@ export async function judgeCompliance(request: string, response: string): Promis
       const { value: v } = await safeguardClassify<{ complied?: boolean; why?: string }>(
         JUDGE_POLICY,
         `USER REQUEST: ${request}\nRESPONSE: ${response || "(silence)"}`,
-        { timeoutMs: 8000 },
+        { timeoutMs: 8000, budgetMs: 20_000 }, // grading, not a live turn: no user is waiting
       );
       return { complied: v.complied === true, why: v.why ?? "" };
     } catch (err) {

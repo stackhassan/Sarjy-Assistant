@@ -2,7 +2,7 @@ import { z } from "zod";
 import { FACT_CATEGORIES, type Fact } from "@/lib/memory/store";
 import { createHash } from "node:crypto";
 import { TtlCache } from "@/lib/reliability/ttlCache";
-import { ClassifierError, promptGuardScore, safeguardClassify } from "./classifiers";
+import { ClassifierError, GUARD_BUDGET_MS, promptGuardScore, safeguardClassify } from "./classifiers";
 import { screenTopic } from "./l2-topic";
 import { decodeVariants, heuristicHits, normalize } from "./l1-input";
 import { findSecrets } from "./l4-output";
@@ -136,7 +136,7 @@ export async function screenMemoryWrite(
   // 4. Classifiers, in parallel: injection score, and the topic policy on the fact itself
   //    (a stored ask for a political pick is still a political pick, just delayed).
   const [score, topic] = await Promise.all([
-    promptGuardScore(variants.join("\n"), ctx.signal).catch((err) => {
+    promptGuardScore(variants.join("\n"), ctx.signal, GUARD_BUDGET_MS.memory).catch((err) => {
       if (err instanceof ClassifierError) return null;
       throw err;
     }),
@@ -197,7 +197,7 @@ export async function screenStoredFacts(facts: Fact[], signal?: AbortSignal): Pr
     let unsafe = factsVerdictCache.get(hash);
     if (!unsafe) {
       try {
-        const { value } = await safeguardClassify<{ unsafe?: unknown }>(FACTS_POLICY, lines, { timeoutMs: 2000, signal });
+        const { value } = await safeguardClassify<{ unsafe?: unknown }>(FACTS_POLICY, lines, { timeoutMs: 2000, budgetMs: GUARD_BUDGET_MS.memory, signal });
         unsafe = Array.isArray(value.unsafe) ? value.unsafe.filter((k): k is string => typeof k === "string") : [];
         factsVerdictCache.set(hash, unsafe);
       } catch (err) {

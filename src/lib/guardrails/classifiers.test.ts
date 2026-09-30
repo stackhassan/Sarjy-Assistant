@@ -94,3 +94,34 @@ describe("Prompt Guard backup", () => {
     expect(calls.map((c) => c.split(":")[1])).toEqual(["meta-llama/llama-prompt-guard-2-86m", "meta-llama/llama-prompt-guard-2-22m"]);
   });
 });
+
+describe("one time budget for the whole backup chain (review feedback)", () => {
+  /** Every endpoint hangs until its request is aborted: the slow-outage worst case. */
+  function hangAll() {
+    const tried: string[] = [];
+    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => {
+      tried.push(JSON.parse(String(init.body)).model);
+      return new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+    });
+    return tried;
+  }
+
+  it("gives up within its budget instead of summing each backup's timeout", async () => {
+    process.env.GEMINI_API_KEY = "g";
+    process.env.MISTRAL_API_KEY = "m";
+    const tried = hangAll();
+    const t0 = performance.now();
+    // Before: 1500 + 3000 + 3000 + 3000 ≈ 10.5 s with all four endpoints hanging.
+    await expect(safeguardClassify("policy", "x", { timeoutMs: 1500, budgetMs: 2000 })).rejects.toThrow(/time budget|timed out/);
+    const ms = performance.now() - t0;
+    expect(ms).toBeLessThan(2300);
+    expect(tried.length).toBeLessThan(4); // backups past the budget are never started
+  });
+
+  it("prompt guard shares one budget across its two models", async () => {
+    hangAll();
+    const t0 = performance.now();
+    await expect(promptGuardScore("hello", undefined, 1500)).rejects.toThrow();
+    expect(performance.now() - t0).toBeLessThan(1800);
+  });
+});

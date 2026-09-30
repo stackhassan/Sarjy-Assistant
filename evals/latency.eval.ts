@@ -56,7 +56,7 @@ async function rawFirstToken(prompt: string, withGuards: boolean): Promise<numbe
     }
   })();
   if (!withGuards) return chat;
-  const [t] = await Promise.all([chat, promptGuardScore(prompt), safeguardClassify(TOPIC_POLICY, `USER MESSAGE: ${prompt}`, { timeoutMs: 5000 })]);
+  const [t] = await Promise.all([chat, promptGuardScore(prompt), safeguardClassify(TOPIC_POLICY, `USER MESSAGE: ${prompt}`, { timeoutMs: 5000, budgetMs: 5000 })]);
   return t;
 }
 
@@ -104,7 +104,7 @@ it("latency: guards on vs off, plus per-component timings", async () => {
   const sgMs: number[] = [];
   for (let i = 0; i < 8; i++) {
     pgMs.push(await time(() => promptGuardScore("What's the weather like in Lahore today?")));
-    sgMs.push(await time(() => safeguardClassify(TOPIC_POLICY, "USER MESSAGE: What's the weather like in Lahore today?", { timeoutMs: 5000 })));
+    sgMs.push(await time(() => safeguardClassify(TOPIC_POLICY, "USER MESSAGE: What's the weather like in Lahore today?", { timeoutMs: 5000, budgetMs: 5000 })));
     await sleep(1500);
   }
 
@@ -193,6 +193,8 @@ The end-to-end ON/OFF rows above compare separate turns, so they include Groq's 
 |---|---|---|---|
 ${one("alone", c.aloneMs)}
 ${one("with Prompt Guard + safeguard running concurrently", c.withGuardsMs)}
+
+Whether the guard calls slow the chat model on the same key is measured separately, with interleaved arms and Groq's own queue time: see \`contention.md\` (\`npm run evals:contention\`).
 
 ## Time to first audio, broken down (p50)
 

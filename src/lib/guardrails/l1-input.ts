@@ -115,7 +115,7 @@ export function heuristicHits(texts: string[]): string[] {
 
 // ---------- the guard ----------
 
-const REFUSAL =
+export const REFUSAL =
   "Nice try! I'm staying plain old Sarjy, rules and all. What can I actually help you with?";
 
 export type L1Result = GuardResult & { score: number | null };
