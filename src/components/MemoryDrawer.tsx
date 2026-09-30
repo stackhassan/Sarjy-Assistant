@@ -5,8 +5,11 @@ import { authHeaders } from "@/lib/client/auth";
 
 type Fact = { key: string; value: string; category: string };
 
-/** What Sarjy remembers about you, with delete. `refreshKey` changes after each turn. */
-export function MemoryDrawer({ refreshKey }: { refreshKey: number }) {
+/**
+ * What Sarjy remembers about you, with delete. `refreshKey` changes after each turn;
+ * `onForget` runs after a delete so the chat can drop the forgotten fact from its context.
+ */
+export function MemoryDrawer({ refreshKey, onForget }: { refreshKey: number; onForget?: () => void }) {
   const [open, setOpen] = useState(false);
   const [facts, setFacts] = useState<Fact[]>([]);
   const [available, setAvailable] = useState(true);
@@ -35,7 +38,8 @@ export function MemoryDrawer({ refreshKey }: { refreshKey: number }) {
 
   const forget = async (key?: string) => {
     if (!key && !confirm("Forget everything Sarjy remembers about you?")) return;
-    await fetch(`/api/memory${key ? `?key=${encodeURIComponent(key)}` : ""}`, { method: "DELETE", headers: await authHeaders() });
+    const res = await fetch(`/api/memory${key ? `?key=${encodeURIComponent(key)}` : ""}`, { method: "DELETE", headers: await authHeaders() });
+    if (res.ok) onForget?.();
     reload();
   };
 

@@ -24,6 +24,11 @@ export type TurnEvent =
       provider?: string;
       timings: Record<string, number>;
       guardsBypassed?: boolean;
+      /**
+       * A fact was forgotten this turn. The client starts the next turn's history after
+       * this turn, or the model would still read the fact in the conversation.
+       */
+      forgot?: boolean;
       /** Everything Sarjy said this turn, chain-signed; the client sends it back as history. */
       assistant: { text: string; sig: string; prev: string };
     }

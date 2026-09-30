@@ -590,8 +590,10 @@ describe("memory end to end", () => {
     const store = new FakeStore();
     store.facts = [{ key: "favorite_color", value: "teal", category: "preference" }];
     install({ replies: [{ tool: { name: "forget_fact", args: { key: "favorite_color" } } }, { text: "Done, forgotten." }] });
-    await memoryTurn("Forget my favorite color", store);
+    const { of } = await memoryTurn("Forget my favorite color", store);
     expect(store.facts).toEqual([]);
+    // The client drops the conversation before this point, or the model still reads the fact there.
+    expect(of("done")[0].forgot).toBe(true);
   });
 
   it("keeps working when memory is down, and says so if asked to remember", async () => {

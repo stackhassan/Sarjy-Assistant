@@ -105,6 +105,7 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
   const spoken: string[] = [];
   let bridgeTimer: ReturnType<typeof setTimeout> | undefined;
   let bridged = false;
+  let forgot = false;
 
   /** Emits approved text as signed, TTS-sized sentence events. */
   const emitSentence = (text: string) => {
@@ -290,6 +291,7 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
               })
             : await runToolGrounded(call, input, bypassGuards, emitGuard, signal, facts);
         timings[`tool:${call.function.name}`] = Math.round(performance.now() - ts);
+        if (result.ok && (call.function.name === "forget_fact" || call.function.name === "forget_everything")) forgot = true;
         emit({ type: "tool_result", id: call.id, name: call.function.name, ok: result.ok, data: result, ms: timings[`tool:${call.function.name}`] });
         reportToolRecovery(call.function.name, result, emit);
         // Only weather data is a source of figures for L3; memory tool results aren't (round 5:
@@ -346,7 +348,7 @@ export async function runTurn(rawInput: TurnInput, emit: (e: TurnEvent) => void,
   const lastAssistantIdx = trusted.map((m) => m.role).lastIndexOf("assistant");
   const userTurns = [...trusted.slice(lastAssistantIdx + 1).map((m) => m.content), rawInput.text];
   const sig = signAssistantTurn(lastSig, userTurns, text);
-  emit({ type: "done", turnId, provider, timings, guardsBypassed: bypassGuards || undefined, assistant: { text, sig, prev: lastSig } });
+  emit({ type: "done", turnId, provider, timings, guardsBypassed: bypassGuards || undefined, forgot: forgot || undefined, assistant: { text, sig, prev: lastSig } });
 }
 
 /**

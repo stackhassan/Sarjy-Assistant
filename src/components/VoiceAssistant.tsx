@@ -44,6 +44,12 @@ export function VoiceAssistant() {
   const speaker = useRef<Speaker | null>(null);
   const inflight = useRef<AbortController | null>(null);
   const turnsRef = useRef<Turn[]>([]);
+  /**
+   * Turns before this index aren't sent as history. Set after a fact is forgotten:
+   * otherwise "my favourite colour is teal" is still in the conversation, and the model
+   * reads it there even though memory no longer has it.
+   */
+  const contextFrom = useRef(0);
   const currentTurn = useRef<string | null>(null);
   const earcon = useRef(new ThinkingEarcon());
   /** Consecutive "didn't catch that" turns, for escalating reprompts. */
@@ -120,6 +126,10 @@ export function VoiceAssistant() {
   const patchTurn = (id: string, fn: (t: Turn) => Turn) =>
     setTurns((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
 
+  const forgetContext = useCallback(() => {
+    contextFrom.current = turnsRef.current.length;
+  }, []);
+
   /** Stop whatever Sarjy is doing: in-flight request and speech. */
   const interrupt = () => {
     inflight.current?.abort();
@@ -132,6 +142,7 @@ export function VoiceAssistant() {
     currentTurn.current = id;
     // Only completed, server-signed turns, most recent 6: the server verifies the chain.
     const history: HistoryMessage[] = turnsRef.current
+      .slice(contextFrom.current)
       .filter((t) => t.assistantSig)
       .slice(-6)
       .flatMap((t) => [
@@ -179,6 +190,7 @@ export function VoiceAssistant() {
           assistantSig: e.type === "done" ? e.assistant.sig : t.assistantSig,
           assistantPrev: e.type === "done" ? e.assistant.prev : t.assistantPrev,
         }));
+        if (e.type === "done" && e.forgot) contextFrom.current = turnsRef.current.length;
         if (e.type === "sentence") speaker.current?.enqueue(e);
         if (e.type === "error") speaker.current?.enqueue({ text: e.spokenFallback, sig: e.sig });
       }
@@ -271,7 +283,7 @@ export function VoiceAssistant() {
           </span>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <MemoryDrawer refreshKey={memoryRev} />
+          <MemoryDrawer refreshKey={memoryRev} onForget={forgetContext} />
           {DEMO && (
             <button
               type="button"

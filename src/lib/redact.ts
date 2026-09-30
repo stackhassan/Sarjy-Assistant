@@ -10,7 +10,7 @@ export function redact(e: TurnEvent): TurnEvent | null {
     case "sentence":
       return e;
     case "done":
-      return { type: "done", turnId: e.turnId, timings: {}, assistant: e.assistant };
+      return { type: "done", turnId: e.turnId, timings: {}, assistant: e.assistant, forgot: e.forgot };
     case "error":
       return { type: "error", stage: "llm", message: "unavailable", spokenFallback: e.spokenFallback, sig: e.sig };
     default:
