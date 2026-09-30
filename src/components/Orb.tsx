@@ -38,22 +38,19 @@ export function Orb({
     >
       <span className="orb-glow" aria-hidden />
       <span className="orb-core" aria-hidden />
-      {size === "sm" && <MicGlyph listening={status === "listening"} />}
+      {size === "sm" && <MicGlyph />}
     </button>
   );
 }
 
-function MicGlyph({ listening }: { listening: boolean }) {
+/** Always a mic: the button's colour shows the state (green while listening). */
+function MicGlyph() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden className="absolute inset-0 m-auto size-5 text-white drop-shadow">
-      {listening ? (
-        <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" />
-      ) : (
-        <path
-          fill="currentColor"
-          d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V20h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"
-        />
-      )}
+      <path
+        fill="currentColor"
+        d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.92V20h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.08A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z"
+      />
     </svg>
   );
 }
